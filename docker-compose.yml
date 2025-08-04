@@ -1,0 +1,16 @@
+services:
+  stream-website:
+    build: .
+    environment:
+      - WEBSITE_URL=${WEBSITE_URL:-https://yarpbot.com/#/status}
+      - RTMP_URL=${RTMP_URL:-rtmp://rtmp-server:1935/live/stream}
+      - RESOLUTION=${RESOLUTION:-1080p}
+      - DISPLAY=:99
+    depends_on:
+      - "rtmp-server"
+
+  # RTMP server for testing
+  rtmp-server:
+    image: tiangolo/nginx-rtmp
+    ports:
+      - "1935:1935"
