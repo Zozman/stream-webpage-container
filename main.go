@@ -110,6 +110,13 @@ func streamWebsite(ctx context.Context, config *Config) error {
 		chromedp.Flag("use-fake-device-for-media-stream", true),
 		chromedp.Flag("alsa-output-device", "pulse"),
 		chromedp.Flag("enable-features", "VaapiVideoDecoder"),
+		// Hide browser UI for clean streaming
+		chromedp.Flag("kiosk", true),
+		chromedp.Flag("disable-infobars", true),
+		chromedp.Flag("disable-automation", true),
+		chromedp.Flag("disable-restore-session-state", true),
+		chromedp.Flag("disable-background-networking", true),
+		chromedp.Flag("no-first-run", true),
 		chromedp.WindowSize(config.Width, config.Height),
 	)
 
@@ -162,8 +169,8 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 		"-video_size", fmt.Sprintf("%dx%d", config.Width, config.Height),
 		"-framerate", "30",
 		"-i", display,
-		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
-		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)
+		"-f", "pulse", // Use PulseAudio directly for better audio capture
+		"-i", "stream_output.monitor", // Capture from the monitor of our stream sink
 		"-c:v", "libx264",
 		"-preset", "veryfast",
 		"-tune", "zerolatency",

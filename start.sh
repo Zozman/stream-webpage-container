@@ -33,11 +33,14 @@ mkdir -p $PULSE_RUNTIME_PATH
 pulseaudio --start --log-target=syslog --system=false &
 sleep 3
 
-# Create a null sink for audio output
-pactl load-module module-null-sink sink_name=null_output sink_properties=device.description=Null_Output 2>/dev/null || echo "Failed to create null sink"
+# Create a null sink for audio output that can be monitored
+pactl load-module module-null-sink sink_name=stream_output sink_properties=device.description=Stream_Output 2>/dev/null || echo "Failed to create stream sink"
 
-# Set the null sink as default
-pactl set-default-sink null_output 2>/dev/null || echo "Failed to set default sink"
+# Set the stream sink as default so browser audio goes there
+pactl set-default-sink stream_output 2>/dev/null || echo "Failed to set default sink"
+
+# Create a loopback from the sink monitor to make it available for capture
+pactl load-module module-loopback source=stream_output.monitor sink=stream_output latency_msec=1 2>/dev/null || echo "Failed to create loopback"
 
 # Create ALSA configuration that uses the default PulseAudio device
 cat > /root/.asoundrc << EOF
@@ -55,6 +58,8 @@ echo "PulseAudio sinks:"
 pactl list short sinks 2>/dev/null || echo "PulseAudio not running"
 echo "PulseAudio sources:"
 pactl list short sources 2>/dev/null || echo "No PulseAudio sources"
+echo "PulseAudio modules:"
+pactl list short modules 2>/dev/null || echo "No PulseAudio modules"
 echo "ALSA devices:"
 aplay -l 2>/dev/null || echo "No ALSA playback devices found"
 

@@ -1,8 +1,6 @@
 module github.com/Zozman/stream-website
 
-go 1.24
-
-toolchain go1.24.5
+go 1.21
 
 require (
 	github.com/chromedp/chromedp v0.11.2
