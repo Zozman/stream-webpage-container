@@ -1,13 +1,10 @@
 # Setup base
-FROM golang:1.24.5-alpine AS base
+FROM golang:1.24.5 AS base
 WORKDIR /app
-# Install ca-certificates to fix TLS issues
-RUN apk add --no-cache ca-certificates
 COPY ./go.mod ./
 COPY ./go.sum ./
-# Set Go proxy and checksum database for better reliability
-ENV GOPROXY=https://proxy.golang.org,direct
-ENV GOSUMDB=sum.golang.org
+# Use direct proxy to avoid TLS issues
+ENV GOPROXY=direct
 RUN go mod download
 COPY ./main.go ./
 
@@ -15,15 +12,10 @@ COPY ./main.go ./
 FROM base AS builder
 RUN go build -o /stream ./main.go
 
-# Download Chrome
-FROM curlimages/curl:latest AS downloader
-RUN curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-    -o google-chrome-stable_current_amd64.deb
-
-# Run using FFmpeg image with Chrome support
+# Run using FFmpeg image with Chromium support
 FROM linuxserver/ffmpeg:7.1.1 AS runner
 
-# Install runtime dependencies
+# Install runtime dependencies and Chromium
 RUN apt-get update && apt-get install -y \
     xvfb \
     x11-utils \
@@ -32,13 +24,7 @@ RUN apt-get update && apt-get install -y \
     alsa-utils \
     libasound2-plugins \
     dbus \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Chrome from downloaded .deb
-COPY --from=downloader /home/curl_user/google-chrome-stable_current_amd64.deb /tmp/google-chrome-stable_current_amd64.deb
-RUN apt-get update \
-    && apt-get install -y /tmp/google-chrome-stable_current_amd64.deb \
-    && rm /tmp/google-chrome-stable_current_amd64.deb \
+    chromium-browser \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories for audio configs
