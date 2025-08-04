@@ -1,8 +1,13 @@
 # Setup base
 FROM golang:1.23-alpine AS base
 WORKDIR /app
+# Install ca-certificates to fix TLS issues
+RUN apk add --no-cache ca-certificates
 COPY ./go.mod ./
 COPY ./go.sum ./
+# Set Go proxy and checksum database for better reliability
+ENV GOPROXY=https://proxy.golang.org,direct
+ENV GOSUMDB=sum.golang.org
 RUN go mod download
 COPY ./main.go ./
 
