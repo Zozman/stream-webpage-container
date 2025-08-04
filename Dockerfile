@@ -1,5 +1,5 @@
 # Setup base
-FROM golang:1.23-alpine AS base
+FROM golang:1.24.5-alpine AS base
 WORKDIR /app
 # Install ca-certificates to fix TLS issues
 RUN apk add --no-cache ca-certificates
