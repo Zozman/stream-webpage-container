@@ -3,20 +3,22 @@ FROM golang:1.24.5 AS base
 WORKDIR /app
 COPY ./go.mod ./
 COPY ./go.sum ./
-# Use direct proxy to avoid TLS issues
-ENV GOPROXY=direct
-RUN go mod download
+COPY ./vendor ./vendor
+# Use vendor directory instead of downloading
+ENV GOPROXY=off
+ENV GOFLAGS=-mod=vendor
 COPY ./main.go ./
 
 # Setup builder
 FROM base AS builder
 RUN go build -o /stream ./main.go
 
-# Run using FFmpeg image with Chromium support
-FROM linuxserver/ffmpeg:7.1.1 AS runner
+# Run using FFmpeg image with Chromium support (use Ubuntu 20.04 base)
+FROM ubuntu:20.04 AS runner
 
-# Install runtime dependencies and Chromium
-RUN apt-get update && apt-get install -y \
+# Install runtime dependencies, FFmpeg, and Chromium from Ubuntu 20.04 repos
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y \
+    ffmpeg \
     xvfb \
     x11-utils \
     pulseaudio \

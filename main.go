@@ -98,7 +98,7 @@ func getEnvOrDefault(key, defaultValue string) string {
 func streamWebsite(ctx context.Context, config *Config) error {
 	// Create Chrome context with options for screen capture
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath("chromium-browser"), // Use chromium-browser binary
+		chromedp.ExecPath("chromium-browser"), // Use chromium-browser from Ubuntu 22.04
 		chromedp.Flag("headless", false), // We need non-headless for video capture
 		chromedp.Flag("disable-gpu", false),
 		chromedp.Flag("no-sandbox", true),
