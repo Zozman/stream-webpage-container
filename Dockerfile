@@ -3,10 +3,9 @@ FROM golang:1.24.5 AS base
 WORKDIR /app
 COPY ./go.mod ./
 COPY ./go.sum ./
-COPY ./vendor ./vendor
-# Use vendor directory instead of downloading
-ENV GOPROXY=off
-ENV GOFLAGS=-mod=vendor
+# Use direct proxy to avoid TLS issues
+ENV GOPROXY=direct
+RUN go mod download
 COPY ./main.go ./
 
 # Setup builder
