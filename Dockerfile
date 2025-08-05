@@ -1,17 +1,3 @@
-# Setup base
-FROM golang:1.24.5 AS base
-WORKDIR /app
-COPY ./go.mod ./
-COPY ./go.sum ./
-# Use direct proxy to avoid TLS issues
-ENV GOPROXY=direct
-RUN go mod download
-COPY ./main.go ./
-
-# Setup builder
-FROM base AS builder
-RUN go build -o /stream ./main.go
-
 # Run using FFmpeg image with Chromium support (use Ubuntu 20.04 base)
 FROM ubuntu:20.04 AS runner
 
@@ -35,8 +21,8 @@ RUN mkdir -p /root/.config/pulse /var/run/pulse /var/run/dbus
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
-# Copy app binary
-COPY --from=builder /stream /stream
+# Copy pre-built app binary
+COPY stream /stream
 
 # Set environment variables (DISPLAY will be set dynamically in start.sh)
 ENV PULSE_RUNTIME_PATH=/var/run/pulse
