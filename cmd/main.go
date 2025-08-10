@@ -18,18 +18,6 @@ import (
 	"github.com/Zozman/stream-website/utils"
 )
 
-const loggerKey string = "logger"
-
-// Helper function to get logger from context
-func getLogger(ctx context.Context) *zap.Logger {
-	if logger, ok := ctx.Value(loggerKey).(*zap.Logger); ok {
-		return logger
-	}
-	// Fallback to a basic logger if none in context
-	logger, _ := zap.NewProduction()
-	return logger
-}
-
 const (
 	DefaultResolution = "720p"
 	DefaultRTMPURL    = "rtmp://localhost:1935/live/stream"
@@ -84,7 +72,7 @@ func main() {
 }
 
 func loadConfig(ctx context.Context) (*Config, error) {
-	logger := getLogger(ctx)
+	logger := utils.GetLoggerFromContext(ctx)
 
 	config := &Config{
 		WebsiteURL: utils.GetEnvOrDefault("WEBSITE_URL", DefaultWebsiteURL),
@@ -129,7 +117,7 @@ func loadConfig(ctx context.Context) (*Config, error) {
 }
 
 func streamWebsite(ctx context.Context, config *Config) error {
-	logger := getLogger(ctx)
+	logger := utils.GetLoggerFromContext(ctx)
 
 	// Create Chrome context with options for screen capture
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -205,7 +193,7 @@ func extractNumberFromBitrate(bitrate string) int {
 }
 
 func startFFmpegStream(ctx context.Context, config *Config, display string) error {
-	logger := getLogger(ctx)
+	logger := utils.GetLoggerFromContext(ctx)
 
 	logger.Info("Starting FFmpeg stream")
 
