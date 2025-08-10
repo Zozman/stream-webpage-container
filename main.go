@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -258,6 +259,15 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 
 	logger.Info("Starting FFmpeg stream")
 
+	// Calculate keyframe interval for 2 seconds (GOP size = framerate * 2)
+	framerate := config.Framerate
+	framerateInt, err := strconv.Atoi(framerate)
+	if err != nil {
+		logger.Error("Invalid framerate, defaulting to 30", zap.String("framerate", framerate), zap.Error(err))
+		framerateInt = 30 // Default to 30
+	}
+	keyframeInterval := fmt.Sprintf("%d", framerateInt*2)
+
 	// FFmpeg command to capture screen and audio, then stream to RTMP
 	args := []string{
 		"-f", "x11grab",
@@ -274,7 +284,7 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 		"-maxrate", "3000k",
 		"-bufsize", "6000k",
 		"-pix_fmt", "yuv420p",
-		"-g", "60",
+		"-g", keyframeInterval, // Set GOP size for 2-second keyframe interval
 		"-c:a", "aac",
 		"-b:a", "128k",
 		"-ar", "44100",
