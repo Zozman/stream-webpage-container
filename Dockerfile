@@ -4,11 +4,12 @@ WORKDIR /app
 COPY ./go.mod ./
 COPY ./go.sum ./
 RUN go mod download
-COPY ./main.go ./
+COPY cmd/ ./cmd/
+COPY utils/ ./utils/
 
 # Setup builder
 FROM base AS builder
-RUN go build -o /stream ./main.go
+RUN go build -o /stream ./cmd/main.go
 
 # Download Chrome
 FROM curlimages/curl:latest AS downloader

@@ -14,6 +14,8 @@ import (
 	"github.com/chromedp/chromedp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
+
+	"github.com/Zozman/stream-website/utils"
 )
 
 const loggerKey string = "logger"
@@ -50,8 +52,8 @@ type Config struct {
 
 func main() {
 	// Get basic log configuration from environment
-	logLevel := getEnvOrDefault("LOG_LEVEL", DefaultLogLevel)
-	logFormat := getEnvOrDefault("LOG_FORMAT", DefaultLogFormat)
+	logLevel := utils.GetEnvOrDefault("LOG_LEVEL", DefaultLogLevel)
+	logFormat := utils.GetEnvOrDefault("LOG_FORMAT", DefaultLogFormat)
 
 	// Initialize logger first
 	logger, err := initializeLogger(logLevel, logFormat)
@@ -139,12 +141,12 @@ func loadConfig(ctx context.Context) (*Config, error) {
 	logger := getLogger(ctx)
 
 	config := &Config{
-		WebsiteURL: getEnvOrDefault("WEBSITE_URL", DefaultWebsiteURL),
-		RTMPURL:    getEnvOrDefault("RTMP_URL", DefaultRTMPURL),
-		Resolution: getEnvOrDefault("RESOLUTION", DefaultResolution),
-		Framerate:  getEnvOrDefault("FRAMERATE", DefaultFramerate),
-		LogLevel:   getEnvOrDefault("LOG_LEVEL", DefaultLogLevel),
-		LogFormat:  getEnvOrDefault("LOG_FORMAT", DefaultLogFormat),
+		WebsiteURL: utils.GetEnvOrDefault("WEBSITE_URL", DefaultWebsiteURL),
+		RTMPURL:    utils.GetEnvOrDefault("RTMP_URL", DefaultRTMPURL),
+		Resolution: utils.GetEnvOrDefault("RESOLUTION", DefaultResolution),
+		Framerate:  utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate),
+		LogLevel:   utils.GetEnvOrDefault("LOG_LEVEL", DefaultLogLevel),
+		LogFormat:  utils.GetEnvOrDefault("LOG_FORMAT", DefaultLogFormat),
 	}
 
 	// Validate and set framerate
@@ -180,13 +182,6 @@ func loadConfig(ctx context.Context) (*Config, error) {
 	}
 
 	return config, nil
-}
-
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }
 
 func streamWebsite(ctx context.Context, config *Config) error {
