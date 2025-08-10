@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
 
@@ -24,6 +28,101 @@ const (
 	DefaultWebsiteURL = "https://google.com"
 	DefaultFramerate  = "30"
 )
+
+// StreamState holds the current stream state
+type StreamState struct {
+	mu           sync.RWMutex
+	isRunning    bool
+	cancelFunc   context.CancelFunc
+	chromeCancel context.CancelFunc
+	ffmpegCmd    *exec.Cmd
+}
+
+// Health response structure
+type Health struct {
+	Uptime  time.Duration
+	Message string
+	Date    time.Time
+}
+
+var (
+	globalStreamState = &StreamState{}
+	startTime         = time.Now()
+)
+
+// setStreamRunning sets the stream as running with the given cancel functions and command
+func (s *StreamState) setStreamRunning(cancelFunc, chromeCancel context.CancelFunc, ffmpegCmd *exec.Cmd) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.isRunning = true
+	s.cancelFunc = cancelFunc
+	s.chromeCancel = chromeCancel
+	s.ffmpegCmd = ffmpegCmd
+}
+
+// stopStream stops the current stream if it's running
+func (s *StreamState) stopStream(logger *zap.Logger) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isRunning {
+		return
+	}
+
+	logger.Info("Stopping existing stream...")
+
+	// Stop FFmpeg process
+	if s.ffmpegCmd != nil && s.ffmpegCmd.Process != nil {
+		logger.Debug("Terminating FFmpeg process")
+		if err := s.ffmpegCmd.Process.Kill(); err != nil {
+			logger.Warn("Failed to kill FFmpeg process", zap.Error(err))
+		}
+	}
+
+	// Cancel Chrome context
+	if s.chromeCancel != nil {
+		logger.Debug("Cancelling Chrome context")
+		s.chromeCancel()
+	}
+
+	// Cancel main stream context
+	if s.cancelFunc != nil {
+		logger.Debug("Cancelling stream context")
+		s.cancelFunc()
+	}
+
+	s.isRunning = false
+	s.cancelFunc = nil
+	s.chromeCancel = nil
+	s.ffmpegCmd = nil
+
+	logger.Info("Existing stream stopped")
+}
+
+// isStreamRunning returns whether a stream is currently running
+func (s *StreamState) isStreamRunning() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.isRunning
+}
+
+// RestartStream stops any existing stream and starts a new one with the given configuration
+func RestartStream(ctx context.Context, config *Config) error {
+	logger := utils.GetLoggerFromContext(ctx)
+	logger.Info("Restarting stream...")
+	return streamWebsite(ctx, config)
+}
+
+// IsStreamRunning returns whether a stream is currently active
+func IsStreamRunning() bool {
+	return globalStreamState.isStreamRunning()
+}
+
+// StopCurrentStream stops any currently running stream
+func StopCurrentStream(ctx context.Context) {
+	logger := utils.GetLoggerFromContext(ctx)
+	globalStreamState.stopStream(logger)
+}
 
 type Config struct {
 	WebsiteURL string
@@ -57,18 +156,67 @@ func main() {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Setup HTTP server for metrics and health checks
+	serverPort := utils.GetEnvOrDefault("PORT", "8080")
+	serverAddress := "0.0.0.0:" + serverPort
+	logger.Info("Starting HTTP server", zap.String("address", serverAddress))
+
+	// Setup HTTP routes
+	setupHTTPRoutes()
+
+	// Start HTTP server in a goroutine
+	server := &http.Server{
+		Addr: serverAddress,
+	}
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("HTTP server error", zap.Error(err))
+		}
+	}()
+
 	// Handle graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
 		logger.Info("Received shutdown signal, stopping...")
+
+		// Stop current stream if running
+		StopCurrentStream(ctx)
+
+		// Shutdown HTTP server
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("Failed to shutdown HTTP server", zap.Error(err))
+		}
+
 		cancel()
 	}()
 
 	if err := streamWebsite(ctx, config); err != nil {
 		logger.Fatal("Failed to stream website", zap.Error(err))
 	}
+}
+
+// Returns the health of the application
+func getHealthResponse(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	data := Health{
+		Uptime:  time.Since(startTime),
+		Message: "OK",
+		Date:    time.Now(),
+	}
+	json.NewEncoder(w).Encode(data)
+}
+
+// setupHTTPRoutes configures the HTTP endpoints
+func setupHTTPRoutes() {
+	// Setup prometheus metrics
+	http.Handle("/metrics", promhttp.Handler())
+	// Setup health endpoint
+	http.HandleFunc("/health", getHealthResponse)
 }
 
 func loadConfig(ctx context.Context) (*Config, error) {
@@ -119,6 +267,18 @@ func loadConfig(ctx context.Context) (*Config, error) {
 func streamWebsite(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
+	// Check if a stream is already running and stop it
+	if globalStreamState.isStreamRunning() {
+		logger.Info("Stream is already running, stopping existing stream before restart")
+		globalStreamState.stopStream(logger)
+		// Give some time for cleanup
+		time.Sleep(2 * time.Second)
+	}
+
+	// Create a cancellable context for this stream session
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	defer streamCancel()
+
 	// Create Chrome context with options for screen capture
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", false), // We need non-headless for video capture
@@ -141,11 +301,11 @@ func streamWebsite(ctx context.Context, config *Config) error {
 		chromedp.WindowSize(config.Width, config.Height),
 	)
 
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer cancel()
+	allocCtx, allocCancel := chromedp.NewExecAllocator(streamCtx, opts...)
+	defer allocCancel()
 
-	chromeCtx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
+	chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
+	defer chromeCancel()
 
 	// Start Chrome and navigate to website
 	logger.Info("Starting Chrome browser", zap.String("url", config.WebsiteURL))
@@ -169,7 +329,7 @@ func streamWebsite(ctx context.Context, config *Config) error {
 	logger.Debug("Display information", zap.String("display", displayInfo))
 
 	// Start FFmpeg to capture and stream
-	return startFFmpegStream(ctx, config, displayInfo)
+	return startFFmpegStream(streamCtx, config, displayInfo, streamCancel, chromeCancel)
 }
 
 func getDisplayInfo() (string, error) {
@@ -192,7 +352,7 @@ func extractNumberFromBitrate(bitrate string) int {
 	return num
 }
 
-func startFFmpegStream(ctx context.Context, config *Config, display string) error {
+func startFFmpegStream(ctx context.Context, config *Config, display string, streamCancel, chromeCancel context.CancelFunc) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
 	logger.Info("Starting FFmpeg stream")
@@ -282,10 +442,24 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 		return fmt.Errorf("failed to start ffmpeg: %v", err)
 	}
 
+	// Register this stream as running
+	globalStreamState.setStreamRunning(streamCancel, chromeCancel, cmd)
+
 	logger.Info("FFmpeg started successfully, streaming...")
 
 	// Wait for the command to finish or context to be cancelled
 	err = cmd.Wait()
+
+	// Clean up stream state when done
+	defer func() {
+		globalStreamState.mu.Lock()
+		globalStreamState.isRunning = false
+		globalStreamState.cancelFunc = nil
+		globalStreamState.chromeCancel = nil
+		globalStreamState.ffmpegCmd = nil
+		globalStreamState.mu.Unlock()
+	}()
+
 	if ctx.Err() != nil {
 		logger.Info("Stream stopped due to context cancellation")
 		return nil
