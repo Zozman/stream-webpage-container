@@ -113,6 +113,7 @@ func streamWebsite(ctx context.Context, config *Config) error {
 		chromedp.Flag("enable-features", "VaapiVideoDecoder"),
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
+		chromedp.Flag("mute-audio", false),
 		chromedp.WindowSize(config.Width, config.Height),
 	)
 
