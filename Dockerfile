@@ -49,7 +49,4 @@ COPY --from=builder /stream /stream
 # Set environment variables (DISPLAY will be set dynamically in start.sh)
 ENV PULSE_RUNTIME_PATH=/var/run/pulse
 
-# Expose FFmpeg debug info
-ENV FFREPORT=file=/tmp/ffmpeg-%p-%t.log:level=32
-
 ENTRYPOINT ["/start.sh"]
