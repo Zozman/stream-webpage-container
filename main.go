@@ -99,6 +99,7 @@ func streamWebsite(ctx context.Context, config *Config) error {
 	// Create Chrome context with options for screen capture
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", false), // We need non-headless for video capture
+		chromedp.Flag("kiosk", true),
 		chromedp.Flag("disable-gpu", false),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-setuid-sandbox", true),
@@ -110,6 +111,8 @@ func streamWebsite(ctx context.Context, config *Config) error {
 		chromedp.Flag("use-fake-device-for-media-stream", true),
 		chromedp.Flag("alsa-output-device", "pulse"),
 		chromedp.Flag("enable-features", "VaapiVideoDecoder"),
+		chromedp.Flag("enable-automation", false),
+		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.WindowSize(config.Width, config.Height),
 	)
 
