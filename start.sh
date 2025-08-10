@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "snd-aloop module not available, using dummy audio"
+echo "=== Setting Up Display ==="
 
 # Clean up any existing X server and choose a random display
 pkill Xvfb || true
@@ -19,6 +19,8 @@ while ! xdpyinfo -display :$DISPLAY_NUM >/dev/null 2>&1; do
     sleep 1
 done
 echo "X server ready"
+
+echo "=== Setting Up Audio ==="
 
 # Start D-Bus for PulseAudio
 mkdir -p /var/run/dbus

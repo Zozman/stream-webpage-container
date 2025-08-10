@@ -114,6 +114,7 @@ func streamWebsite(ctx context.Context, config *Config) error {
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("mute-audio", false),
+		chromedp.Flag("window-position", "0,0"),
 		chromedp.WindowSize(config.Width, config.Height),
 	)
 
@@ -165,9 +166,10 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 		"-f", "x11grab",
 		"-video_size", fmt.Sprintf("%dx%d", config.Width, config.Height),
 		"-framerate", "30",
-		"-i", display,
+		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offse
 		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
 		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)
+		"-vf", "crop=in_w:in_h:0:0", // Crop to exact dimensions
 		"-c:v", "libx264",
 		"-preset", "veryfast",
 		"-tune", "zerolatency",
