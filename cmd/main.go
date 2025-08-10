@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
 
@@ -25,6 +28,12 @@ const (
 	DefaultFramerate  = "30"
 )
 
+var (
+	startTime = time.Now()
+	streamCmd *exec.Cmd
+)
+
+// Configuration for what and how to stream
 type Config struct {
 	WebsiteURL string
 	RTMPURL    string
@@ -32,6 +41,13 @@ type Config struct {
 	Framerate  string
 	Width      int
 	Height     int
+}
+
+// Health response structure
+type Health struct {
+	Uptime  time.Duration
+	Message string
+	Date    time.Time
 }
 
 func main() {
@@ -66,9 +82,37 @@ func main() {
 		cancel()
 	}()
 
-	if err := streamWebsite(ctx, config); err != nil {
-		logger.Fatal("Failed to stream website", zap.Error(err))
+	// Load the website
+	if err := loadWebsite(ctx, config); err != nil {
+		logger.Fatal("Failed to load website", zap.Error(err))
 	}
+
+	// Start FFmpeg to capture and stream
+	if _, err = restartStream(ctx, config); err != nil {
+		logger.Fatal("Failed to start FFmpeg stream", zap.Error(err))
+	}
+
+	// Setup HTTP server for metrics and health checks
+	serverPort := utils.GetEnvOrDefault("PORT", "8080")
+	serverAddress := "0.0.0.0:" + serverPort
+	logger.Info("Starting HTTP server", zap.String("address", serverAddress))
+	// Setup prometheus metrics
+	http.Handle("/metrics", promhttp.Handler())
+	// Setup health endpoint
+	http.HandleFunc("/health", getHealthResponse)
+	// Start HTTP server
+	http.ListenAndServe(serverAddress, nil)
+}
+
+// Returns the health of the application
+func getHealthResponse(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	data := Health{
+		Uptime:  time.Since(startTime),
+		Message: "OK",
+		Date:    time.Now(),
+	}
+	json.NewEncoder(w).Encode(data)
 }
 
 func loadConfig(ctx context.Context) (*Config, error) {
@@ -116,7 +160,7 @@ func loadConfig(ctx context.Context) (*Config, error) {
 	return config, nil
 }
 
-func streamWebsite(ctx context.Context, config *Config) error {
+func loadWebsite(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
 	// Create Chrome context with options for screen capture
@@ -168,8 +212,58 @@ func streamWebsite(ctx context.Context, config *Config) error {
 
 	logger.Debug("Display information", zap.String("display", displayInfo))
 
-	// Start FFmpeg to capture and stream
-	return startFFmpegStream(ctx, config, displayInfo)
+	return nil
+}
+
+// Stops the current FFmpeg stream if running
+func stopStream(ctx context.Context) error {
+	logger := utils.GetLoggerFromContext(ctx)
+
+	if streamCmd != nil {
+		logger.Info("Stopping FFmpeg stream")
+		if err := streamCmd.Process.Kill(); err != nil {
+			return fmt.Errorf("failed to stop FFmpeg process: %v", err)
+		}
+		streamCmd = nil
+		logger.Info("FFmpeg stream stopped successfully")
+	} else {
+		logger.Warn("No active FFmpeg stream to stop")
+	}
+
+	return nil
+}
+
+// Starts a new FFmpeg stream with the given configuration
+// If a stream is already running, it stops the previous one first
+func startStream(ctx context.Context, config *Config) (*exec.Cmd, error) {
+	logger := utils.GetLoggerFromContext(ctx)
+
+	if streamCmd != nil {
+		logger.Warn("Stream already running, stopping previous instance")
+		if err := stopStream(ctx); err != nil {
+			return nil, fmt.Errorf("failed to stop previous stream: %v", err)
+		}
+	}
+
+	displayInfo, err := getDisplayInfo()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get display info: %v", err)
+	}
+
+	cmd, err := startFFmpegStream(ctx, config, displayInfo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start website stream: %v", err)
+	}
+
+	streamCmd = cmd
+	logger.Info("Website stream started successfully")
+
+	return cmd, nil
+}
+
+func restartStream(ctx context.Context, config *Config) (*exec.Cmd, error) {
+	stopStream(ctx)
+	return startStream(ctx, config)
 }
 
 func getDisplayInfo() (string, error) {
@@ -192,7 +286,7 @@ func extractNumberFromBitrate(bitrate string) int {
 	return num
 }
 
-func startFFmpegStream(ctx context.Context, config *Config, display string) error {
+func startFFmpegStream(ctx context.Context, config *Config, display string) (*exec.Cmd, error) {
 	logger := utils.GetLoggerFromContext(ctx)
 
 	logger.Info("Starting FFmpeg stream")
@@ -276,20 +370,13 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 	cmd.Stdout = zapWriter
 	cmd.Stderr = zapWriter
 
-	logger.Info("Starting FFmpeg with command", zap.Strings("args", args))
+	logger.Debug("Starting FFmpeg with command", zap.Strings("args", args))
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start ffmpeg: %v", err)
+		return nil, fmt.Errorf("failed to start FFmpeg command: %v", err)
 	}
 
 	logger.Info("FFmpeg started successfully, streaming...")
 
-	// Wait for the command to finish or context to be cancelled
-	err = cmd.Wait()
-	if ctx.Err() != nil {
-		logger.Info("Stream stopped due to context cancellation")
-		return nil
-	}
-
-	return err
+	return cmd, nil
 }
