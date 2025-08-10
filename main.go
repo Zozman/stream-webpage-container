@@ -15,15 +15,17 @@ import (
 )
 
 const (
-	DefaultResolution = "1080p"
+	DefaultResolution = "720p"
 	DefaultRTMPURL    = "rtmp://localhost:1935/live/stream"
-	DefaultWebsiteURL = "https://example.com"
+	DefaultWebsiteURL = "https://google.com"
+	DefaultFramerate  = "30"
 )
 
 type Config struct {
 	WebsiteURL string
 	RTMPURL    string
 	Resolution string
+	Framerate  string
 	Width      int
 	Height     int
 	Logger     *zap.Logger
@@ -42,6 +44,7 @@ func main() {
 		zap.String("website", config.WebsiteURL),
 		zap.String("rtmp", config.RTMPURL),
 		zap.String("resolution", config.Resolution),
+		zap.String("framerate", config.Framerate),
 		zap.Int("width", config.Width),
 		zap.Int("height", config.Height))
 
@@ -67,7 +70,17 @@ func loadConfig(logger *zap.Logger) *Config {
 		WebsiteURL: getEnvOrDefault("WEBSITE_URL", DefaultWebsiteURL),
 		RTMPURL:    getEnvOrDefault("RTMP_URL", DefaultRTMPURL),
 		Resolution: getEnvOrDefault("RESOLUTION", DefaultResolution),
+		Framerate:  getEnvOrDefault("FRAMERATE", DefaultFramerate),
 		Logger:     logger,
+	}
+
+	// Validate framerate
+	switch config.Framerate {
+	case "30", "60":
+		// Valid framerates
+	default:
+		logger.Warn("Unsupported framerate, defaulting to 30fps", zap.String("framerate", config.Framerate))
+		config.Framerate = "30"
 	}
 
 	// Set resolution dimensions
@@ -78,6 +91,9 @@ func loadConfig(logger *zap.Logger) *Config {
 	case "1080p":
 		config.Width = 1920
 		config.Height = 1080
+	case "2k":
+		config.Width = 2560
+		config.Height = 1440
 	default:
 		logger.Warn("Unsupported resolution, defaulting to 1080p", zap.String("resolution", config.Resolution))
 		config.Resolution = "1080p"
@@ -165,7 +181,7 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 	args := []string{
 		"-f", "x11grab",
 		"-video_size", fmt.Sprintf("%dx%d", config.Width, config.Height),
-		"-framerate", "30",
+		"-framerate", config.Framerate,
 		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offse
 		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
 		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)

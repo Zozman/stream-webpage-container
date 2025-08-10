@@ -9,8 +9,31 @@ rm -f /tmp/.X*-lock
 DISPLAY_NUM=$((RANDOM % 100 + 100))  # Random display between 100-199
 export DISPLAY=:$DISPLAY_NUM
 
+# Set screen resolution from environment variable or default to 720p
+RESOLUTION=${RESOLUTION:-"720p"}
+echo "Using resolution setting: $RESOLUTION"
+
+# Map resolution names to pixel dimensions
+case $RESOLUTION in
+    "720p")
+        SCREEN_RESOLUTION="1280x720"
+        ;;
+    "1080p")
+        SCREEN_RESOLUTION="1920x1080"
+        ;;
+    "2k")
+        SCREEN_RESOLUTION="2560x1440"
+        ;;
+    *)
+        echo "Warning: Unknown resolution '$RESOLUTION', defaulting to 720p"
+        SCREEN_RESOLUTION="1280x720"
+        ;;
+esac
+
+echo "Using screen resolution: $SCREEN_RESOLUTION"
+
 echo "Starting X server on display $DISPLAY"
-Xvfb :$DISPLAY_NUM -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+Xvfb :$DISPLAY_NUM -screen 0 ${SCREEN_RESOLUTION}x24 -ac +extension GLX +render -noreset &
 sleep 3
 
 # Wait for X server to be ready
