@@ -254,6 +254,17 @@ func getDisplayInfo() (string, error) {
 	return display, nil
 }
 
+// Helper function to extract numeric value from bitrate string (e.g., "3000k" -> 3000)
+func extractNumberFromBitrate(bitrate string) int {
+	// Remove the 'k' suffix and convert to int
+	numStr := strings.TrimSuffix(bitrate, "k")
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		return 3000 // Default fallback
+	}
+	return num
+}
+
 func startFFmpegStream(ctx context.Context, config *Config, display string) error {
 	logger := getLogger(ctx)
 
@@ -268,12 +279,52 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 	}
 	keyframeInterval := fmt.Sprintf("%d", framerateInt*2)
 
+	// Set bitrate based on Twitch recommendations for resolution and framerate
+	// References: https://help.twitch.tv/s/article/broadcasting-guidelines?language=en_US
+	//             https://help.twitch.tv/s/article/stream-quality?language=en_US#how-to-stream
+	var videoBitrate string
+	audioBitrate := "160k" // Always use 160k for audio
+
+	switch strings.ToLower(config.Resolution) {
+	case "720p":
+		if framerateInt >= 60 {
+			videoBitrate = "4000k" // 720p 60fps: 4000 kbps
+		} else {
+			videoBitrate = "3000k" // 720p 30fps: 3000 kbps
+		}
+	case "1080p":
+		if framerateInt >= 60 {
+			videoBitrate = "6000k" // 1080p 60fps: 6000 kbps
+		} else {
+			videoBitrate = "4500k" // 1080p 30fps: 4500 kbps
+		}
+	case "2k":
+		if framerateInt >= 60 {
+			videoBitrate = "8500k" // 2K 60fps: 8500 kbps (Twitch max for non-partners)
+		} else {
+			videoBitrate = "6000k" // 2K 30fps: 6000 kbps
+		}
+	default:
+		// Default to 720p 30fps settings
+		videoBitrate = "3000k"
+	}
+
+	// Buffer size should be 2x the video bitrate
+	bufferSize := fmt.Sprintf("%dk", (extractNumberFromBitrate(videoBitrate) * 2))
+
+	logger.Debug("Starting Stream Using FFmpeg",
+		zap.String("resolution", config.Resolution),
+		zap.String("framerate", config.Framerate),
+		zap.String("videoBitrate", videoBitrate),
+		zap.String("audioBitrate", audioBitrate),
+		zap.String("bufferSize", bufferSize))
+
 	// FFmpeg command to capture screen and audio, then stream to RTMP
 	args := []string{
 		"-f", "x11grab",
 		"-video_size", fmt.Sprintf("%dx%d", config.Width, config.Height),
 		"-framerate", config.Framerate,
-		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offse
+		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offset
 		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
 		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)
 		"-vf", "crop=in_w:in_h:0:0", // Crop to exact dimensions
@@ -281,12 +332,12 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 		"-preset", "veryfast",
 		"-tune", "zerolatency",
 		"-crf", "23",
-		"-maxrate", "3000k",
-		"-bufsize", "6000k",
+		"-maxrate", videoBitrate,
+		"-bufsize", bufferSize,
 		"-pix_fmt", "yuv420p",
 		"-g", keyframeInterval, // Set GOP size for 2-second keyframe interval
 		"-c:a", "aac",
-		"-b:a", "128k",
+		"-b:a", audioBitrate,
 		"-ar", "44100",
 		"-f", "flv",
 		config.RTMPURL,
