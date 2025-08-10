@@ -4,8 +4,10 @@ services:
     environment:
       - WEBSITE_URL=${WEBSITE_URL:-https://yarpbot.com/#/status}
       - RTMP_URL=${RTMP_URL:-rtmp://rtmp-server:1935/live/stream}
-      - RESOLUTION=${RESOLUTION:-1080p}
-      - DISPLAY=:99
+      - RESOLUTION=${RESOLUTION:-720p}
+      - FRAMERATE=${FRAMERATE:-60}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
     depends_on:
       - "rtmp-server"
 
