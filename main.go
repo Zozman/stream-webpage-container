@@ -307,7 +307,7 @@ func startFFmpegStream(ctx context.Context, config *Config, display string) erro
 	logger.Info("FFmpeg started successfully, streaming...")
 
 	// Wait for the command to finish or context to be cancelled
-	err := cmd.Wait()
+	err = cmd.Wait()
 	if ctx.Err() != nil {
 		logger.Info("Stream stopped due to context cancellation")
 		return nil
