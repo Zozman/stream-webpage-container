@@ -35,8 +35,6 @@ const (
 	DefaultRTMPURL    = "rtmp://localhost:1935/live/stream"
 	DefaultWebsiteURL = "https://google.com"
 	DefaultFramerate  = "30"
-	DefaultLogLevel   = "info"
-	DefaultLogFormat  = "json"
 )
 
 type Config struct {
@@ -44,26 +42,15 @@ type Config struct {
 	RTMPURL    string
 	Resolution string
 	Framerate  string
-	LogLevel   string
-	LogFormat  string
 	Width      int
 	Height     int
 }
 
 func main() {
-	// Get basic log configuration from environment
-	logLevel := utils.GetEnvOrDefault("LOG_LEVEL", DefaultLogLevel)
-	logFormat := utils.GetEnvOrDefault("LOG_FORMAT", DefaultLogFormat)
-
-	// Initialize logger first
-	logger, err := initializeLogger(logLevel, logFormat)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to initialize logger: %v", err))
-	}
-	defer logger.Sync()
+	logger := utils.GetLogger()
 
 	// Create context with logger
-	ctx := context.WithValue(context.Background(), loggerKey, logger)
+	ctx := utils.SaveLoggerToContext(context.Background(), logger)
 
 	// Load configuration with logging available
 	config, err := loadConfig(ctx)
@@ -76,8 +63,6 @@ func main() {
 		zap.String("rtmp", config.RTMPURL),
 		zap.String("resolution", config.Resolution),
 		zap.String("framerate", config.Framerate),
-		zap.String("logLevel", config.LogLevel),
-		zap.String("logFormat", config.LogFormat),
 		zap.Int("width", config.Width),
 		zap.Int("height", config.Height))
 
@@ -98,45 +83,6 @@ func main() {
 	}
 }
 
-func initializeLogger(logLevel, logFormat string) (*zap.Logger, error) {
-	// Parse log level
-	var level zap.AtomicLevel
-	switch strings.ToLower(logLevel) {
-	case "debug":
-		level = zap.NewAtomicLevelAt(zap.DebugLevel)
-	case "info":
-		level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	case "warn", "warning":
-		level = zap.NewAtomicLevelAt(zap.WarnLevel)
-	case "error":
-		level = zap.NewAtomicLevelAt(zap.ErrorLevel)
-	case "dpanic":
-		level = zap.NewAtomicLevelAt(zap.DPanicLevel)
-	case "panic":
-		level = zap.NewAtomicLevelAt(zap.PanicLevel)
-	case "fatal":
-		level = zap.NewAtomicLevelAt(zap.FatalLevel)
-	default:
-		level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	}
-
-	// Configure logger based on format
-	var config zap.Config
-	switch strings.ToLower(logFormat) {
-	case "console":
-		config = zap.NewDevelopmentConfig()
-		config.Level = level
-	case "json":
-		config = zap.NewProductionConfig()
-		config.Level = level
-	default:
-		config = zap.NewProductionConfig()
-		config.Level = level
-	}
-
-	return config.Build()
-}
-
 func loadConfig(ctx context.Context) (*Config, error) {
 	logger := getLogger(ctx)
 
@@ -145,8 +91,6 @@ func loadConfig(ctx context.Context) (*Config, error) {
 		RTMPURL:    utils.GetEnvOrDefault("RTMP_URL", DefaultRTMPURL),
 		Resolution: utils.GetEnvOrDefault("RESOLUTION", DefaultResolution),
 		Framerate:  utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate),
-		LogLevel:   utils.GetEnvOrDefault("LOG_LEVEL", DefaultLogLevel),
-		LogFormat:  utils.GetEnvOrDefault("LOG_FORMAT", DefaultLogFormat),
 	}
 
 	// Validate and set framerate
