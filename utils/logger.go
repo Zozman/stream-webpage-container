@@ -9,16 +9,22 @@ import (
 )
 
 const (
-	defaultLogLevel  = "info"
+	// Default log level (info level logs)
+	defaultLogLevel = "info"
+	// Default log format (structuted JSON logs)
 	defaultLogFormat = "json"
-	loggerKey        = "logger"
+	// Key for logger in context
+	loggerKey = "logger"
 )
 
 var (
-	logger     *zap.Logger
+	// Global logger instance
+	logger *zap.Logger
+	// Once to ensure logger is initialized only once
 	loggerOnce sync.Once
 )
 
+// Function to get the global logger instance and instantiate it if not already done
 func GetLogger() *zap.Logger {
 	loggerOnce.Do(func() {
 		var err error
@@ -31,6 +37,7 @@ func GetLogger() *zap.Logger {
 	return logger
 }
 
+// Function to initialize the logger with configuration from environment variables
 func initializeLogger() (*zap.Logger, error) {
 	// Get basic log configuration from environment
 	logLevel := GetEnvOrDefault("LOG_LEVEL", defaultLogLevel)

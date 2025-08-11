@@ -11,10 +11,13 @@ import (
 )
 
 var (
-	client     *helix.Client
+	// Twitch API client instance
+	client *helix.Client
+	// Once object to ensure the client is initialized only once
 	clientOnce sync.Once
 )
 
+// Function to return the Twitch API client and initialize it if not already done
 func GetClient(ctx context.Context) *helix.Client {
 	clientOnce.Do(func() {
 		var err error

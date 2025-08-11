@@ -26,14 +26,19 @@ import (
 )
 
 const (
-	DefaultResolution            = "720p"
-	DefaultRTMPURL               = "rtmp://localhost:1935/live/stream"
-	DefaultWebsiteURL            = "https://google.com"
-	DefaultFramerate             = "30"
+	// Default resoltion for streams sent by the application
+	DefaultResolution = "720p"
+	// Default RTMP URL to stream to
+	DefaultRTMPURL = "rtmp://localhost:1935/live/stream"
+	// Default website to capture
+	DefaultWebsiteURL = "https://google.com"
+	// Default framerate for the stream
+	DefaultFramerate = "30"
+	// Default cron string for checking stream status
 	DefaultCheckStreamCronString = "*/10 * * * *" // Every 10 minutes
 )
 
-// StreamState holds the current stream state
+// Struct that represents the current state of the stream
 type StreamState struct {
 	mu           sync.RWMutex
 	isRunning    bool
@@ -50,11 +55,13 @@ type Health struct {
 }
 
 var (
+	// Global stream state shared across the application
 	globalStreamState = &StreamState{}
-	startTime         = time.Now()
+	// When the application started; used for health checks
+	startTime = time.Now()
 )
 
-// setStreamRunning sets the stream as running with the given cancel functions and command
+// Function to set that the current stream is running and save the right objects into the StreamState
 func (s *StreamState) setStreamRunning(cancelFunc, chromeCancel context.CancelFunc, ffmpegCmd *exec.Cmd) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -64,7 +71,7 @@ func (s *StreamState) setStreamRunning(cancelFunc, chromeCancel context.CancelFu
 	s.ffmpegCmd = ffmpegCmd
 }
 
-// stopStream stops the current stream if it's running
+// Function to end the current stream if it's running
 func (s *StreamState) stopStream(logger *zap.Logger) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -103,14 +110,14 @@ func (s *StreamState) stopStream(logger *zap.Logger) {
 	logger.Info("Existing stream stopped")
 }
 
-// isStreamRunning returns whether a stream is currently running
+// Function to get if the current stream is running
 func (s *StreamState) isStreamRunning() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.isRunning
 }
 
-// RestartStream stops any existing stream and lets the main loop restart it
+// Function to restart the stream
 func RestartStream(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
 	logger.Info("Triggering stream restart...")
@@ -121,24 +128,35 @@ func RestartStream(ctx context.Context, config *Config) error {
 	return nil
 }
 
-// IsStreamRunning returns whether a stream is currently active
+// Function to check if the stream is currently running
 func IsStreamRunning() bool {
 	return globalStreamState.isStreamRunning()
 }
 
-// StopCurrentStream stops any currently running stream
+// Function to stop the current stream if it's running
 func StopCurrentStream(ctx context.Context) {
 	logger := utils.GetLoggerFromContext(ctx)
 	globalStreamState.stopStream(logger)
 }
 
+// Struct representing the configuration for the stream
 type Config struct {
+	// The URL of the webstie to stream
 	WebsiteURL string
-	RTMPURL    string
+	// The RTMP URL to stream to
+	RTMPURL string
+	// The resolution of the stream
+	// Can be "720p", "1080p", "2k"
+	// Defaults to "720p" if not set or invalid
 	Resolution string
-	Framerate  string
-	Width      int
-	Height     int
+	// The framerate of the stream
+	// Can be "30" or "60"
+	// Defaults to "30" if not set or invalid
+	Framerate string
+	// Computed width based on resolution
+	Width int
+	// Computed height based on resolution
+	Height int
 }
 
 func main() {
@@ -153,7 +171,7 @@ func main() {
 		logger.Fatal("Failed to load configuration", zap.Error(err))
 	}
 
-	logger.Info("Starting website stream capture",
+	logger.Debug("Starting website stream capture",
 		zap.String("website", config.WebsiteURL),
 		zap.String("rtmp", config.RTMPURL),
 		zap.String("resolution", config.Resolution),
@@ -209,9 +227,12 @@ func main() {
 	// Run the stream in a loop to handle restarts from the cron job or manual restarts
 	for {
 		select {
+		// Case to handle an expected shutdown signal
 		case <-ctx.Done():
 			logger.Info("Context cancelled, exiting...")
 			return
+		// Default case to start or restart the stream
+		// This will be triggered by the cron job or manual restarts
 		default:
 			logger.Info("Starting/restarting stream...")
 			if err := streamWebsite(ctx, config); err != nil {
@@ -237,7 +258,7 @@ func getHealthResponse(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// setupHTTPRoutes configures the HTTP endpoints
+// Function to setup HTTP routes for metrics and health checks
 func setupHTTPRoutes() {
 	// Setup prometheus metrics
 	http.Handle("/metrics", promhttp.Handler())
@@ -245,6 +266,7 @@ func setupHTTPRoutes() {
 	http.HandleFunc("/health", getHealthResponse)
 }
 
+// Function to load configuration from environment variables
 func loadConfig(ctx context.Context) (*Config, error) {
 	logger := utils.GetLoggerFromContext(ctx)
 
@@ -290,6 +312,7 @@ func loadConfig(ctx context.Context) (*Config, error) {
 	return config, nil
 }
 
+// Function to stream the specified website using Chrome and FFmpeg
 func streamWebsite(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
@@ -358,6 +381,7 @@ func streamWebsite(ctx context.Context, config *Config) error {
 	return startFFmpegStream(streamCtx, config, displayInfo, streamCancel, chromeCancel)
 }
 
+// Function to get the display info generated by the start.sh script and feed it to FFmpeg
 func getDisplayInfo() (string, error) {
 	// Try to get the DISPLAY environment variable
 	display := os.Getenv("DISPLAY")
@@ -378,6 +402,7 @@ func extractNumberFromBitrate(bitrate string) int {
 	return num
 }
 
+// Function to start FFmpeg stream with the given configuration
 func startFFmpegStream(ctx context.Context, config *Config, display string, streamCancel, chromeCancel context.CancelFunc) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
@@ -398,6 +423,7 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 	var videoBitrate string
 	audioBitrate := "160k" // Always use 160k for audio
 
+	// Compute the bitrate based on resolution and framerate
 	switch strings.ToLower(config.Resolution) {
 	case "720p":
 		if framerateInt >= 60 {
@@ -462,7 +488,7 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 	cmd.Stdout = zapWriter
 	cmd.Stderr = zapWriter
 
-	logger.Info("Starting FFmpeg with command", zap.Strings("args", args))
+	logger.Debug("Starting FFmpeg with command", zap.Strings("args", args))
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start ffmpeg: %v", err)
@@ -471,12 +497,12 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 	// Register this stream as running
 	globalStreamState.setStreamRunning(streamCancel, chromeCancel, cmd)
 
-	logger.Info("FFmpeg started successfully, streaming...")
+	logger.Debug("FFmpeg started successfully, streaming...")
 
 	// Wait for the command to finish or context to be cancelled
 	err = cmd.Wait()
 
-	// Clean up stream state when done
+	// Clean up global stream state when done
 	defer func() {
 		globalStreamState.mu.Lock()
 		globalStreamState.isRunning = false
