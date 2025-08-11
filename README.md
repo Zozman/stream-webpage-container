@@ -1,66 +1,40 @@
-# Stream Website
+# Stream Website Container
 
-A Go application that captures live website content (both visual and audio) and streams it to an RTMP endpoint using Chrome headless browser and FFmpeg.
+A containerized application to stream a webpage live over RTMP.  Just pass a `WEBSITE_URL` and a `RTMP_URL` and the container will open a browser, capture the video and audio, and send it to the specified location.  It can even be configured to automatically restart the stream for supported services.
 
-## Features
+## Uses
 
-- **Website Capture**: Captures any website content including dynamic content, videos, and audio
-- **Live Streaming**: Streams captured content to RTMP endpoints in real-time
-- **Configurable Resolution**: Supports 720p and 1080p output resolutions
-- **Docker Support**: Fully containerized with multi-stage builds
-- **Graceful Shutdown**: Handles shutdown signals properly
-- **Logging**: Structured logging with Zap
+- Quickly spinning up a test stream without needing to install anything other than a container runtime.
+- Setting up a long running stream for a [Twitch Extension Review](https://dev.twitch.tv/docs/extensions/life-cycle/#review) when a test stream is needed.
+- Setting up a way to broadcast an overlay [like YarpBot does for its status page](https://www.twitch.tv/yarpbot) without a GUI client.
+- Other.... stuff (you figure it out).
 
-## How It Works
-
-1. **Chrome Browser**: Launches a Chrome browser instance to render the target website
-2. **Screen Capture**: Uses FFmpeg's x11grab to capture the browser window
-3. **Audio Capture**: Captures system audio using PulseAudio
-4. **Encoding**: Encodes video with H.264 and audio with AAC
-5. **Streaming**: Streams the encoded content to the specified RTMP endpoint
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `WEBSITE_URL` | URL of the website to capture | `https://example.com` |
-| `RTMP_URL` | RTMP endpoint to stream to | `rtmp://localhost:1935/live/stream` |
-| `RESOLUTION` | Output resolution (720p or 1080p) | `1080p` |
-
-## Quick Start
+## Running From Source
 
 ### Using Docker Compose
 
-1. Clone the repository and navigate to the stream-website directory:
-```bash
-cd stream-website
-```
+1. Clone the repository
 
-2. Set environment variables (optional):
-```bash
-export WEBSITE_URL="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-export RTMP_URL="rtmp://your-rtmp-server/live/stream"
-export RESOLUTION="1080p"
-```
+2. Set environment variables (through copying [`.env.example`](./.env.example) to `.env` or other methods)
 
 3. Start the application:
 ```bash
 docker-compose up --build
 ```
 
-### With RTMP Test Server
+### Local Development With RTMP Test Server
 
 To test with a local RTMP server:
 
 ```bash
 # Start with the included RTMP server
-docker-compose --profile rtmp-server up --build
+docker-compose --profile dev up --build
 
 # The RTMP server will be available at:
-# - RTMP: rtmp://localhost:1935/live/stream
-# - Web interface: http://localhost:8080
-# - Stream stats: http://localhost:8080/stat
+# rtmp://localhost:1935/live/stream
 ```
+
+You can then use a program like VLC to view the stream to ensure it works (use `Media` -> `Open Network Stream` and use the address `rtmp://localhost:1935/live/stream` for this example).
 
 ### Using Docker Only
 
@@ -72,127 +46,87 @@ docker build -t stream-website .
 docker run -e WEBSITE_URL="https://example.com" \
            -e RTMP_URL="rtmp://your-server/live/stream" \
            -e RESOLUTION="1080p" \
-           --security-opt seccomp:unconfined \
-           --cap-add SYS_ADMIN \
-           -v /dev/shm:/dev/shm \
            stream-website
 ```
 
-## Local Development
+> [!WARNING]
+> While you **can** run this locally by compiling the go code and executing it, I wouldn't recommend it as you need to make sure all the dependencies such as Chrome and [ffmpeg](https://ffmpeg.org) are there and reachable.  Plus, having this be a container's kind of the point.
 
-### Prerequisites
+## Status Checking
 
-- Go 1.21 or later
-- FFmpeg
-- Google Chrome
-- PulseAudio
-- X11 (for display)
+If an environmental variable such as `TWITCH_CHANNEL` (see below) is set, then the container will check that channel to make sure the stream is live and attempt to restart the stream if it is not.  This is so the stream can automatically be restarted for platforms that have maximum stream lengths (such as Twitch's [being 48 hours per stream](https://help.twitch.tv/s/article/broadcasting-guidelines?language=en_US)).
 
-### Running Locally
+### Twitch
 
-1. Install dependencies:
-```bash
-go mod download
-```
+To enable status checking for Twitch, provide a `TWITCH_CHANNEL`, `TWITCH_CLIENT_ID`, and `TWITCH_CLIENT_SECRET` environmental variable (see below for details).
 
-2. Set environment variables:
-```bash
-export WEBSITE_URL="https://example.com"
-export RTMP_URL="rtmp://localhost:1935/live/stream"
-export RESOLUTION="1080p"
-```
+> [!NOTE]
+> Currently Twitch is the only supported platform but you can always file a PR if you want another platform.
 
-3. Run the application:
-```bash
-go run main.go
-```
+## Environmental Variables
 
-## Configuration
+- `FRAMERATE`
+   - Enum
+      - `30`
+      - `60`
+   - Default: `30`
+   - Sets the framerate of the stream.  Currently supports `30` or `60` frames per second.
+- `LOG_FORMAT`
+   - Enum
+      - `json`
+      - `console`
+   - Default: `json`
+   - Sets the format for logs printed.
+- `LOG_LEVEL`
+   - Enum
+      - `debug`
+      - `info`
+      - `warn`
+      - `warning`
+      - `error`
+      - `dpanic`
+      - `panic`
+      - `fatal`
+   - Default: `info`
+   - Level of logs that are printed.  Defined by [`zap` log levels](https://pkg.go.dev/go.uber.org/zap/zapcore#Level).
+- `PORT`
+   - String
+   - Default: `8080`
+   - Port to run the health and metrics endpoint on.
+- `STATUS_CRON_SCHEDULE`
+   - String
+   - Default: `*/10 * * * *` (every 10 minutes)
+   - Cron string to define how often to check the status of the stream if status checking is enabled.
+- `RESOLUTION`
+   - Enum
+      - `720p`
+      - `1080p`
+      - `2k`
+   - Default: `720p`
+   - What resolution the RTMP stream should be.
+- `RTMP_URL`
+   - String
+   - Default: `rtmp://localhost:1935/live/stream`
+   - RMTP endpoint to send the stream to.  If using a service such as [Twitch](https://help.twitch.tv/s/twitch-ingest-recommendation?language=en_US), be sure your stream key is at the end of it.
+- `TWITCH_CHANNEL`
+   - String
+   - If provided a value, the application will attempt to check the status of the stream at the provided channel as per the `STATUS_CRON_SCHEDULE` and will restart the stream if it is detected to not be live.
+   - Requires the `TWITCH_CLIENT_ID` and `TWITCH_CLIENT_SECRET` to be defined to work properly.
+- `TWITCH_CLIENT_ID`
+   - String
+   - Twitch Client ID obtained from the [Twitch Developer Console](https://dev.twitch.tv/console) for checking stream status if the `TWITCH_CHANNEL` environmental variable is set.
+   - Checking for the stream status on Twitch will not work without this and `TWITCH_CLIENT_SECRET` being set.
+   - For more information about registering an app on Twitch, see [the developer documentation](https://dev.twitch.tv/docs/authentication/register-app/).
+- `TWITCH_CLIENT_SECRET`
+   - String
+   - Twitch Client ID obtained from the [Twitch Developer Console](https://dev.twitch.tv/console) for checking stream status if the `TWITCH_CHANNEL` environmental variable is set.
+   - Checking for the stream status on Twitch will not work without this and `TWITCH_CLIENT_ID` being set.
+   - For more information about registering an app on Twitch, see [the developer documentation](https://dev.twitch.tv/docs/authentication/register-app/).
+- `WEBSITE_URL`
+   - String
+   - Default: `https://google.com`
+   - The website to stream.
 
-### Supported Resolutions
+## About
 
-- **720p**: 1280x720 pixels
-- **1080p**: 1920x1080 pixels (default)
-
-### FFmpeg Settings
-
-The application uses optimized FFmpeg settings for live streaming:
-
-- **Video Codec**: H.264 with libx264
-- **Preset**: veryfast (for low latency)
-- **CRF**: 23 (balanced quality)
-- **Max Bitrate**: 3000k
-- **Buffer Size**: 6000k
-- **Audio Codec**: AAC at 128k bitrate
-- **Frame Rate**: 30 FPS
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Chrome fails to start**:
-   - Ensure the container has proper permissions
-   - Check that `--security-opt seccomp:unconfined` and `--cap-add SYS_ADMIN` are set
-
-2. **No audio capture**:
-   - Audio is captured using PulseAudio with virtual audio devices
-   - The container automatically creates virtual speakers and microphones
-   - Check the startup logs for audio device debugging information
-   - If audio issues persist, try restarting the container
-
-3. **FFmpeg errors**:
-   - Verify the RTMP endpoint is accessible
-   - Check network connectivity
-   - Ensure the RTMP server supports the streaming format
-
-4. **High CPU usage**:
-   - Consider using 720p resolution for lower resource usage
-   - Adjust FFmpeg preset (use "faster" or "fast" instead of "veryfast")
-
-### Logs
-
-The application provides structured JSON logs showing:
-- Startup configuration
-- Browser navigation status
-- FFmpeg command execution
-- Error details
-
-### Performance Tuning
-
-For better performance:
-
-1. **Use 720p resolution** for lower CPU usage:
-```bash
-export RESOLUTION="720p"
-```
-
-2. **Adjust FFmpeg settings** by modifying the FFmpeg arguments in `main.go`
-
-3. **Allocate more shared memory** by increasing the `/dev/shm` volume size
-
-## Architecture
-
-```
-┌─────────────┐    ┌──────────────┐    ┌─────────────┐    ┌──────────────┐
-│   Website   │ -> │    Chrome    │ -> │   FFmpeg    │ -> │ RTMP Server  │
-│             │    │   Browser    │    │  (capture   │    │              │
-│             │    │              │    │ & encode)   │    │              │
-└─────────────┘    └──────────────┘    └─────────────┘    └──────────────┘
-```
-
-1. Chrome renders the target website
-2. FFmpeg captures the Chrome window using x11grab
-3. FFmpeg captures system audio using PulseAudio
-4. FFmpeg encodes and streams to RTMP endpoint
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test with Docker
-5. Submit a pull request
-
-## License
-
-This project is part of the Stream Website ecosystem.
+Cobbled together by [Zac Lovoy](https://bsky.app/profile/zwlovoy.bsky.social) (aka [BigZoz on Twitch](https://www.twitch.tv/bigzoz)).  If you're interested in some of other streaming adjacent stuff, check out [YarpBot](https://yarpbot.com) or the [Filters Extension for Twitch](https://dashboard.twitch.tv/extensions/npqfekui52xl3nuuk91h2pmrszod57).  Or whatever; I'm not your dad.

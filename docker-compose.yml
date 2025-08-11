@@ -15,11 +15,10 @@ services:
       - WEBSITE_URL=${WEBSITE_URL:-https://google.com}
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
-    depends_on:
-      - "rtmp-server"
 
   # RTMP server for testing
   rtmp-server:
     image: tiangolo/nginx-rtmp
+    profiles: ["dev"]
     ports:
       - "1935:1935"
