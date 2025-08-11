@@ -9,6 +9,10 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-debug}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - PORT=${PORT:-8080}
+      - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
+      - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
+      - TWITCH_CHANNEL=${TWITCH_CHANNEL}
+      - STATUS_CRON_SCHEDULE=${STATUS_CRON_SCHEDULE}
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     depends_on:

@@ -5,6 +5,7 @@ COPY ./go.mod ./
 COPY ./go.sum ./
 RUN go mod download
 COPY cmd/ ./cmd/
+COPY twitch/ ./twitch/
 COPY utils/ ./utils/
 
 # Setup builder

@@ -15,18 +15,22 @@ import (
 	"time"
 
 	"github.com/chromedp/chromedp"
+	"github.com/nicklaw5/helix/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
 
+	"github.com/Zozman/stream-website/twitch"
 	"github.com/Zozman/stream-website/utils"
 )
 
 const (
-	DefaultResolution = "720p"
-	DefaultRTMPURL    = "rtmp://localhost:1935/live/stream"
-	DefaultWebsiteURL = "https://google.com"
-	DefaultFramerate  = "30"
+	DefaultResolution            = "720p"
+	DefaultRTMPURL               = "rtmp://localhost:1935/live/stream"
+	DefaultWebsiteURL            = "https://google.com"
+	DefaultFramerate             = "30"
+	DefaultCheckStreamCronString = "*/10 * * * *" // Every 10 minutes
 )
 
 // StreamState holds the current stream state
@@ -106,11 +110,15 @@ func (s *StreamState) isStreamRunning() bool {
 	return s.isRunning
 }
 
-// RestartStream stops any existing stream and starts a new one with the given configuration
+// RestartStream stops any existing stream and lets the main loop restart it
 func RestartStream(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
-	logger.Info("Restarting stream...")
-	return streamWebsite(ctx, config)
+	logger.Info("Triggering stream restart...")
+
+	// Stop the current stream - the main loop will automatically restart it
+	globalStreamState.stopStream(logger)
+
+	return nil
 }
 
 // IsStreamRunning returns whether a stream is currently active
@@ -175,6 +183,9 @@ func main() {
 		}
 	}()
 
+	// Setup stream status checker (will start monitoring after stream begins)
+	setupStreamStatusChecker(ctx, config)
+
 	// Handle graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -195,8 +206,23 @@ func main() {
 		cancel()
 	}()
 
-	if err := streamWebsite(ctx, config); err != nil {
-		logger.Fatal("Failed to stream website", zap.Error(err))
+	// Run the stream in a loop to handle restarts from the cron job or manual restarts
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Info("Context cancelled, exiting...")
+			return
+		default:
+			logger.Info("Starting/restarting stream...")
+			if err := streamWebsite(ctx, config); err != nil {
+				if ctx.Err() != nil {
+					logger.Info("Stream stopped due to context cancellation")
+					return
+				}
+				logger.Info("Stream ended, will restart in 5 seconds", zap.Error(err))
+				time.Sleep(5 * time.Second)
+			}
+		}
 	}
 }
 
@@ -466,4 +492,54 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 	}
 
 	return err
+}
+
+// If the proper enviromental variables are set, setup a cron job to check the status of the stream
+// If the stream is not live, then restart the stream
+// This is used because various platforms have maximum stream durations and after that we need to restart
+func setupStreamStatusChecker(ctx context.Context, config *Config) {
+	logger := utils.GetLoggerFromContext(ctx)
+
+	logger.Debug("Setting up stream status checker")
+
+	// If a TWITCH_CHANNEL environment variable is set, we assume we want to check the stream status
+	twitchChannel := utils.GetEnvOrDefault("TWITCH_CHANNEL", "")
+	if twitchChannel != "" {
+		logger.Info("Setting up stream status checker for Twitch channel", zap.String("channel", twitchChannel))
+
+		// Get and validate the cron string from environment variables or use the default
+		cronString := utils.GetEnvOrDefault("STATUS_CRON_SCHEDULE", DefaultCheckStreamCronString)
+		if _, err := cron.ParseStandard(cronString); err != nil {
+			logger.Error("Invalid status cron schedule string, using default", zap.String("cronString", cronString), zap.Error(err))
+			cronString = DefaultCheckStreamCronString
+		}
+		logger.Debug("Using cron schedule for stream status checker", zap.String("cronString", cronString))
+
+		c := cron.New()
+		c.AddFunc(cronString, func() {
+			logger.Info("Checking Twitch stream status", zap.String("channel", twitchChannel))
+
+			client := twitch.GetClient(ctx)
+			resp, err := client.GetStreams(&helix.StreamsParams{
+				UserLogins: []string{twitchChannel},
+			})
+			if err != nil {
+				logger.Error("Failed to get Twitch stream status", zap.Error(err))
+				return
+			}
+
+			if len(resp.Data.Streams) == 0 {
+				logger.Warn("Stream is not live, restarting...")
+				if err := RestartStream(ctx, config); err != nil {
+					logger.Error("Failed to restart stream", zap.Error(err))
+				}
+			} else {
+				logger.Info("Stream is live", zap.String("title", resp.Data.Streams[0].Title))
+			}
+		})
+		c.Start()
+		logger.Info("Stream status checker started", zap.String("cronString", cronString))
+	} else {
+		logger.Debug("Stream status checker not configured, skipping setup")
+	}
 }
