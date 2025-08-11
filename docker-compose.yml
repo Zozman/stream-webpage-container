@@ -2,17 +2,17 @@ services:
   stream-website:
     build: .
     environment:
-      - WEBSITE_URL=${WEBSITE_URL:-https://yarpbot.com/#/status}
-      - RTMP_URL=${RTMP_URL:-rtmp://rtmp-server:1935/live/stream}
-      - RESOLUTION=${RESOLUTION:-720p}
       - FRAMERATE=${FRAMERATE:-60}
-      - LOG_LEVEL=${LOG_LEVEL:-debug}
       - LOG_FORMAT=${LOG_FORMAT:-json}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
       - PORT=${PORT:-8080}
+      - STATUS_CRON_SCHEDULE=${STATUS_CRON_SCHEDULE}
+      - RESOLUTION=${RESOLUTION:-720p}
+      - RTMP_URL=${RTMP_URL:-rtmp://rtmp-server:1935/live/stream}
+      - TWITCH_CHANNEL=${TWITCH_CHANNEL}
       - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
       - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
-      - TWITCH_CHANNEL=${TWITCH_CHANNEL}
-      - STATUS_CRON_SCHEDULE=${STATUS_CRON_SCHEDULE}
+      - WEBSITE_URL=${WEBSITE_URL:-https://google.com}
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
     depends_on:

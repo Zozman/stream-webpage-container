@@ -22,6 +22,9 @@ go.work
 .env.local
 .env.test
 .env.twitch
+.env.720p
+.env.1080p
+.env.2k
 
 # IDE files
 .vscode/
