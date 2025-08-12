@@ -1,6 +1,6 @@
-# Stream Website Container
+# Stream Webpage Container
 
-A containerized application to stream a webpage live over RTMP.  Just pass a `WEBSITE_URL` and a `RTMP_URL` and the container will open a browser, capture the video and audio, and send it to the specified location.  It can even be configured to automatically restart the stream for supported services.
+A containerized application to stream a webpage live over RTMP.  Just pass a `WEBPAGE_URL` and a `RTMP_URL` and the container will open a browser, capture the video and audio, and send it to the specified location.  It can even be configured to automatically restart the stream for supported services.
 
 ## Uses
 
@@ -40,13 +40,13 @@ You can then use a program like VLC to view the stream to ensure it works (use `
 
 ```bash
 # Build the image
-docker build -t stream-website .
+docker build -t stream-webpage .
 
 # Run the container
-docker run -e WEBSITE_URL="https://example.com" \
+docker run -e WEBPAGE_URL="https://example.com" \
            -e RTMP_URL="rtmp://your-server/live/stream" \
            -e RESOLUTION="1080p" \
-           stream-website
+           stream-webpage
 ```
 
 > [!WARNING]
@@ -122,10 +122,10 @@ To enable status checking for Twitch, provide a `TWITCH_CHANNEL`, `TWITCH_CLIENT
    - Twitch Client ID obtained from the [Twitch Developer Console](https://dev.twitch.tv/console) for checking stream status if the `TWITCH_CHANNEL` environmental variable is set.
    - Checking for the stream status on Twitch will not work without this and `TWITCH_CLIENT_ID` being set.
    - For more information about registering an app on Twitch, see [the developer documentation](https://dev.twitch.tv/docs/authentication/register-app/).
-- `WEBSITE_URL`
+- `WEBPAGE_URL`
    - String
    - Default: `https://google.com`
-   - The website to stream.
+   - The webpage to stream.
 
 ## About
 

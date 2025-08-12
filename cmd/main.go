@@ -21,8 +21,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapio"
 
-	"github.com/Zozman/stream-website/twitch"
-	"github.com/Zozman/stream-website/utils"
+	"github.com/Zozman/stream-webpage-container/twitch"
+	"github.com/Zozman/stream-webpage-container/utils"
 )
 
 const (
@@ -30,8 +30,8 @@ const (
 	DefaultResolution = "720p"
 	// Default RTMP URL to stream to
 	DefaultRTMPURL = "rtmp://localhost:1935/live/stream"
-	// Default website to capture
-	DefaultWebsiteURL = "https://google.com"
+	// Default webpage to capture
+	DefaultWebpageURL = "https://google.com"
 	// Default framerate for the stream
 	DefaultFramerate = "30"
 	// Default cron string for checking stream status
@@ -142,7 +142,7 @@ func StopCurrentStream(ctx context.Context) {
 // Struct representing the configuration for the stream
 type Config struct {
 	// The URL of the webstie to stream
-	WebsiteURL string
+	WebpageURL string
 	// The RTMP URL to stream to
 	RTMPURL string
 	// The resolution of the stream
@@ -171,8 +171,8 @@ func main() {
 		logger.Fatal("Failed to load configuration", zap.Error(err))
 	}
 
-	logger.Debug("Starting website stream capture",
-		zap.String("website", config.WebsiteURL),
+	logger.Debug("Starting webpage stream capture",
+		zap.String("webpage", config.WebpageURL),
 		zap.String("rtmp", config.RTMPURL),
 		zap.String("resolution", config.Resolution),
 		zap.String("framerate", config.Framerate),
@@ -235,7 +235,7 @@ func main() {
 		// This will be triggered by the cron job or manual restarts
 		default:
 			logger.Info("Starting/restarting stream...")
-			if err := streamWebsite(ctx, config); err != nil {
+			if err := streamWebpage(ctx, config); err != nil {
 				if ctx.Err() != nil {
 					logger.Info("Stream stopped due to context cancellation")
 					return
@@ -271,7 +271,7 @@ func loadConfig(ctx context.Context) (*Config, error) {
 	logger := utils.GetLoggerFromContext(ctx)
 
 	config := &Config{
-		WebsiteURL: utils.GetEnvOrDefault("WEBSITE_URL", DefaultWebsiteURL),
+		WebpageURL: utils.GetEnvOrDefault("WEBPAGE_URL", DefaultWebpageURL),
 		RTMPURL:    utils.GetEnvOrDefault("RTMP_URL", DefaultRTMPURL),
 		Resolution: utils.GetEnvOrDefault("RESOLUTION", DefaultResolution),
 		Framerate:  utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate),
@@ -312,8 +312,8 @@ func loadConfig(ctx context.Context) (*Config, error) {
 	return config, nil
 }
 
-// Function to stream the specified website using Chrome and FFmpeg
-func streamWebsite(ctx context.Context, config *Config) error {
+// Function to stream the specified webpage using Chrome and FFmpeg
+func streamWebpage(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
 	// Check if a stream is already running and stop it
@@ -356,14 +356,14 @@ func streamWebsite(ctx context.Context, config *Config) error {
 	chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
 	defer chromeCancel()
 
-	// Start Chrome and navigate to website
-	logger.Info("Starting Chrome browser", zap.String("url", config.WebsiteURL))
+	// Start Chrome and navigate to webpage
+	logger.Info("Starting Chrome browser", zap.String("url", config.WebpageURL))
 
 	if err := chromedp.Run(chromeCtx,
-		chromedp.Navigate(config.WebsiteURL),
+		chromedp.Navigate(config.WebpageURL),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 	); err != nil {
-		return fmt.Errorf("failed to navigate to website: %v", err)
+		return fmt.Errorf("failed to navigate to webpage: %v", err)
 	}
 
 	// Wait a moment for the page to fully load

@@ -1,4 +1,4 @@
-module github.com/Zozman/stream-website
+module github.com/Zozman/stream-webpage-container
 
 go 1.24
 

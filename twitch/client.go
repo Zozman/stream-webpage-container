@@ -7,7 +7,7 @@ import (
 
 	"github.com/nicklaw5/helix/v2"
 
-	"github.com/Zozman/stream-website/utils"
+	"github.com/Zozman/stream-webpage-container/utils"
 )
 
 var (
