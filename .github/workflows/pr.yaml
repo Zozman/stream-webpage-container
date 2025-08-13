@@ -35,11 +35,41 @@ jobs:
         reporter: golang-json
         fail-on-error: true
 
-  integration-test:
-    name: Integration Test (${{ matrix.resolution }})
+  build-image:
+    name: Build Docker Image
     runs-on: ubuntu-latest
     needs: test
     if: needs.test.result == 'success'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Build and cache Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: stream-webpage:test-${{ github.run_id }}
+        outputs: type=docker,dest=/tmp/stream-webpage-${{ github.run_id }}.tar
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+    
+    - name: Upload Docker image artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: docker-image-${{ github.run_id }}
+        path: /tmp/stream-webpage-${{ github.run_id }}.tar
+        retention-days: 1
+
+  integration-test:
+    name: Integration Test (${{ matrix.resolution }})
+    runs-on: ubuntu-latest
+    needs: [test, build-image]
+    if: needs.test.result == 'success' && needs.build-image.result == 'success'
     
     strategy:
       matrix:
@@ -65,16 +95,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Build Docker image
-      uses: docker/build-push-action@v5
+    - name: Download Docker image artifact
+      uses: actions/download-artifact@v4
       with:
-        context: .
-        push: false
-        tags: stream-webpage:test
-        load: true
+        name: docker-image-${{ github.run_id }}
+        path: /tmp
+    
+    - name: Load Docker image
+      run: docker load -i /tmp/stream-webpage-${{ github.run_id }}.tar
     
     - name: Start stream-webpage container
       run: |
@@ -88,7 +116,7 @@ jobs:
           -e RESOLUTION=${{ matrix.resolution }} \
           -e RTMP_URL=rtmp://localhost:1935/live/stream \
           -e WEBPAGE_URL="https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs" \
-          stream-webpage:test
+          stream-webpage:test-${{ github.run_id }}
     
     - name: Setup FFmpeg
       uses: FedericoCarboni/setup-ffmpeg@v3
@@ -115,7 +143,7 @@ jobs:
         echo "Checking stream properties with ffprobe..."
         timeout 30 ffprobe -v quiet -print_format json -show_streams rtmp://localhost:1935/live/stream > stream_info.json 2>/dev/null || {
           echo "Stream not available yet, checking container logs..."
-          docker logs $(docker ps -q --filter ancestor=stream-webpage:test)
+          docker logs stream-webpage
           docker logs $(docker ps -q --filter ancestor=tiangolo/nginx-rtmp)
           exit 1
         }
