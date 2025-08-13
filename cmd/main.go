@@ -467,6 +467,8 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offset
 		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
 		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)
+		"-map", "0:v", // Explicitly map video from input 0 (x11grab)
+		"-map", "1:a", // Explicitly map audio from input 1 (alsa)
 		"-vf", "crop=in_w:in_h:0:0", // Crop to exact dimensions
 		"-c:v", "libx264",
 		"-preset", "veryfast",
