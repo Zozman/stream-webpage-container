@@ -145,4 +145,6 @@ To enable status checking for Twitch, provide a `TWITCH_CHANNEL`, `TWITCH_CLIENT
 
 ## About
 
-Cobbled together by [Zac Lovoy](https://bsky.app/profile/zwlovoy.bsky.social) (aka [BigZoz on Twitch](https://www.twitch.tv/bigzoz)).  If you're interested in some of other streaming adjacent stuff, check out [YarpBot](https://yarpbot.com) or the [Filters Extension for Twitch](https://dashboard.twitch.tv/extensions/npqfekui52xl3nuuk91h2pmrszod57).  Or whatever; I'm not your dad.
+Cobbled together by [Zac Lovoy](https://bsky.app/profile/zwlovoy.bsky.social) (aka [BigZoz on Twitch](https://www.twitch.tv/bigzoz)).  If you're interested in some of other streaming adjacent stuff, check out [YarpBot](https://yarpbot.com) or the [Filters Extension for Twitch](https://dashboard.twitch.tv/extensions/npqfekui52xl3nuuk91h2pmrszod57).
+
+Or whatever; I'm not your dad.
