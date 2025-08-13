@@ -14,7 +14,7 @@ run:
 test:
 	@echo "Running tests and generating coverage report..."
 	@mkdir -p coverage
-	docker compose run --rm --build -v $(PWD)/coverage:/app/coverage test go test -v -coverprofile=coverage/coverage.out ./...
+	docker compose run --rm --build -v $(PWD)/coverage:/app/coverage test go test -coverprofile=coverage/coverage.out ./...
 	docker compose run --rm -v $(PWD)/coverage:/app/coverage test go tool cover -html=coverage/coverage.out -o coverage/coverage.html
 	@echo "Coverage report generated in coverage/coverage.html"
 
