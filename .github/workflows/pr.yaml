@@ -120,6 +120,7 @@ jobs:
     
     - name: Setup FFmpeg
       uses: FedericoCarboni/setup-ffmpeg@v3
+      id: setup-ffmpeg
     
     - name: Wait for services to start
       run: |
@@ -141,7 +142,8 @@ jobs:
         
         # Use ffprobe to check stream properties
         echo "Checking stream properties with ffprobe..."
-        timeout 30 ffprobe -v quiet -print_format json -show_streams rtmp://localhost:1935/live/stream > stream_info.json 2>/dev/null || {
+        echo "Using ffprobe from: ${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}/ffprobe"
+        timeout 30 "${{ steps.setup-ffmpeg.outputs.ffmpeg-path }}/ffprobe" -v quiet -print_format json -show_streams rtmp://localhost:1935/live/stream > stream_info.json 2>/dev/null || {
           echo "Stream not available yet, checking container logs..."
           docker logs stream-webpage
           docker logs $(docker ps -q --filter ancestor=tiangolo/nginx-rtmp)
