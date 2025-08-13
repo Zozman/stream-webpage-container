@@ -115,7 +115,7 @@ jobs:
         docker run -d \
           --name stream-webpage \
           --network host \
-          -e FRAMERATE=60 \
+          -e FRAMERATE=30 \
           -e LOG_FORMAT=json \
           -e LOG_LEVEL=debug \
           -e PORT=8080 \
@@ -127,7 +127,7 @@ jobs:
     - name: Wait for services to start
       run: |
         echo "Waiting for services to start..."
-        sleep 60
+        sleep 120
 
     - name: Test Stream Container Health Endpoint
       run: |
@@ -164,13 +164,12 @@ jobs:
         timeout 30 "ffprobe" -v quiet -print_format json -show_streams rtmp://localhost:1935/live/stream > stream_info.json 2>/dev/null || {
           echo "Stream not available yet, checking container logs..."
           docker logs stream-webpage
-          docker logs $(docker ps -q --filter ancestor=tiangolo/nginx-rtmp)
           exit 1
         }
         
         # Check if stream matches expected resolution
-        height=$(cat stream_info.json | jq -r '.streams[0].height // empty')
-        width=$(cat stream_info.json | jq -r '.streams[0].width // empty')
+        height=$(cat stream_info.json | jq -r '.streams[] | select(.codec_type == "video") | .height // empty')
+        width=$(cat stream_info.json | jq -r '.streams[] | select(.codec_type == "video") | .width // empty')
         
         echo "Stream resolution: ${width}x${height}"
         echo "Expected resolution: ${{ matrix.expected_width }}x${{ matrix.expected_height }}"
@@ -180,6 +179,7 @@ jobs:
         else
           echo "❌ Stream is not ${{ matrix.resolution }}. Expected ${{ matrix.expected_width }}x${{ matrix.expected_height }}, got ${width}x${height}"
           cat stream_info.json | jq '.'
+          docker logs stream-webpage
           exit 1
         fi
         
