@@ -1,5 +1,5 @@
 services:
-  stream-webpage:
+  stream:
     build: .
     environment:
       - FRAMERATE=${FRAMERATE:-60}
@@ -12,13 +12,12 @@ services:
       - TWITCH_CHANNEL=${TWITCH_CHANNEL}
       - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
       - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
-      - WEBPAGE_URL=${WEBPAGE_URL:-https://google.com}
+      - WEBPAGE_URL=${WEBPAGE_URL:-https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs}
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
 
   # RTMP server for testing
   rtmp-server:
     image: tiangolo/nginx-rtmp
-    profiles: ["dev"]
     ports:
       - "1935:1935"

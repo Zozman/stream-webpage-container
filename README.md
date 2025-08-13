@@ -17,9 +17,9 @@ A containerized application to stream a webpage live over RTMP.  Just pass a `WE
 
 2. Set environment variables (through copying [`.env.example`](./.env.example) to `.env` or other methods)
 
-3. Start the application:
+3. Start just the application:
 ```bash
-docker-compose up --build
+docker-compose up --build stream
 ```
 
 ### Local Development With RTMP Test Server
@@ -28,7 +28,7 @@ To test with a local RTMP server:
 
 ```bash
 # Start with the included RTMP server
-docker-compose --profile dev up --build
+docker-compose up --build
 
 # The RTMP server will be available at:
 # rtmp://localhost:1935/live/stream

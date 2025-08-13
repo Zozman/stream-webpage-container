@@ -463,6 +463,7 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 		"-f", "x11grab",
 		"-video_size", fmt.Sprintf("%dx%d", config.Width, config.Height),
 		"-framerate", config.Framerate,
+		"-draw_mouse", "0", // Hide mouse cursor
 		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offset
 		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
 		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)
