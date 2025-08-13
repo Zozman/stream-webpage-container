@@ -86,6 +86,24 @@ aplay -l 2>/dev/null || echo "No ALSA playback devices found"
 # Wait for audio system to stabilize
 sleep 2
 
-echo "=== Starting application ==="
+echo "=== Verifying System Readiness ==="
+
+# Wait for X server to be fully functional
+echo "Waiting for X server to be fully ready..."
+while ! xdpyinfo -display :$DISPLAY_NUM >/dev/null 2>&1; do
+    echo "X server not yet ready, waiting..."
+    sleep 2
+done
+echo "✓ X server is ready"
+
+# Wait for PulseAudio to be fully functional
+echo "Waiting for PulseAudio to be ready..."
+while ! pactl info >/dev/null 2>&1; do
+    echo "PulseAudio not yet ready, waiting..."
+    sleep 2
+done
+echo "✓ PulseAudio is responding"
+
+echo "=== All Dependencies Ready - Starting Application ==="
 # Start the stream application
 exec /stream
