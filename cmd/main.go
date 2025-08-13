@@ -458,6 +458,20 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 		zap.String("audioBitrate", audioBitrate),
 		zap.String("bufferSize", bufferSize))
 
+	// Validate that the display is accessible before starting FFmpeg
+	logger.Debug("Validating display access", zap.String("display", display))
+	if _, err := exec.LookPath("xdpyinfo"); err == nil {
+		// xdpyinfo is available, use it to test display access
+		testCmd := exec.CommandContext(ctx, "xdpyinfo", "-display", display)
+		if err := testCmd.Run(); err != nil {
+			logger.Error("Display is not accessible", zap.String("display", display), zap.Error(err))
+			return fmt.Errorf("display %s is not accessible: %v", display, err)
+		}
+		logger.Debug("Display access validated successfully")
+	} else {
+		logger.Warn("xdpyinfo not found, skipping display validation")
+	}
+
 	// FFmpeg command to capture screen and audio, then stream to RTMP
 	args := []string{
 		"-f", "x11grab",
@@ -467,6 +481,8 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offset
 		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
 		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)
+		"-map", "0:v", // Explicitly map video from input 0 (x11grab)
+		"-map", "1:a", // Explicitly map audio from input 1 (alsa)
 		"-vf", "crop=in_w:in_h:0:0", // Crop to exact dimensions
 		"-c:v", "libx264",
 		"-preset", "veryfast",
