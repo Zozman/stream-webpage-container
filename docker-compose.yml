@@ -1,5 +1,6 @@
 services:
-  stream:
+  # Image to build and run the app
+  stream-webpage:
     build: .
     environment:
       - FRAMERATE=${FRAMERATE:-60}
@@ -13,8 +14,12 @@ services:
       - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
       - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
       - WEBPAGE_URL=${WEBPAGE_URL:-https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs}
-    ports:
-      - "${PORT:-8080}:${PORT:-8080}"
+
+  # Image to run unit tests in
+  test:
+    build:
+      context: .
+      target: base
 
   # RTMP server for testing
   rtmp-server:

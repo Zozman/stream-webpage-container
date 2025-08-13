@@ -11,6 +11,9 @@ A containerized application to stream a webpage live over RTMP.  Just pass a `WE
 
 ## Running From Source
 
+> [!NOTE]
+> For the following `make` commands, you should have [Docker](https://www.docker.com/) installed since they use `docker` and `docker compose` under the hood.
+
 ### Using Docker Compose
 
 1. Clone the repository
@@ -19,7 +22,7 @@ A containerized application to stream a webpage live over RTMP.  Just pass a `WE
 
 3. Start just the application:
 ```bash
-docker-compose up --build stream
+make run
 ```
 
 ### Local Development With RTMP Test Server
@@ -28,13 +31,26 @@ To test with a local RTMP server:
 
 ```bash
 # Start with the included RTMP server
-docker-compose up --build
+make dev
 
 # The RTMP server will be available at:
 # rtmp://localhost:1935/live/stream
 ```
 
 You can then use a program like VLC to view the stream to ensure it works (use `Media` -> `Open Network Stream` and use the address `rtmp://localhost:1935/live/stream` for this example).
+
+### Run Unit Tests
+
+To run unit tests within a dockerized environment, run the following:
+
+```bash
+make test
+```
+
+This command will save coverage results to the `coverage` directory.
+
+> [!NOTE]
+> If you have [go](https://go.dev/) installed, you can also run `go test -v -coverprofile=coverage/coverage.out ./... && go tool cover -html=coverage/coverage.out -o coverage/coverage.html` to do the same thing locally.
 
 ### Using Docker Only
 
