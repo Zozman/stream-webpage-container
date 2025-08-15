@@ -4,7 +4,6 @@ name: Edge Image Build
 
 concurrency:
   group: edge-build
-  cancel-in-progress: false
 
 on:
   push:
