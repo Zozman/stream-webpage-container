@@ -127,7 +127,7 @@ jobs:
     - name: Wait for services to start
       run: |
         echo "Waiting for services to start..."
-        sleep 300
+        sleep 60
 
     - name: Test Stream Container Health Endpoint
       run: |
@@ -159,10 +159,26 @@ jobs:
           echo "RTMP server is ready"
         '
         
-        # Use ffprobe to check stream properties
-        echo "Checking stream properties with ffprobe..."
-        timeout 30 "ffprobe" -v quiet -print_format json -show_streams rtmp://localhost:1935/live/stream > stream_info.json 2>/dev/null || {
-          echo "Stream not available yet, checking container logs..."
+        # Use ffprobe to check stream properties and wait for video stream
+        echo "Checking stream properties with ffprobe and waiting for video stream..."
+        timeout 300 bash -c '
+          while true; do
+            if ffprobe -v quiet -print_format json -show_streams rtmp://localhost:1935/live/stream > stream_info.json 2>/dev/null; then
+              # Check if we have a video stream
+              video_stream_count=$(cat stream_info.json | jq -r "[.streams[] | select(.codec_type == \"video\")] | length")
+              if [ "$video_stream_count" -gt 0 ]; then
+                echo "Video stream found! Stream is ready."
+                break
+              else
+                echo "Only audio stream found, waiting for video stream..."
+              fi
+            else
+              echo "Stream not yet available, retrying..."
+            fi
+            sleep 2
+          done
+        ' || {
+          echo "Timeout waiting for video stream, checking container logs..."
           docker logs stream-webpage
           exit 1
         }
