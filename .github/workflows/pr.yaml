@@ -36,7 +36,7 @@ jobs:
         fail-on-error: true
 
   build-image:
-    name: Build Docker Image
+    name: Build Test Docker Image
     runs-on: ubuntu-latest
     needs: test
     if: needs.test.result == 'success'
@@ -66,7 +66,7 @@ jobs:
         retention-days: 1
 
   integration-test:
-    name: Integration Test (${{ matrix.resolution }})
+    name: Run Integration Test (${{ matrix.resolution }})
     runs-on: ubuntu-latest
     needs: [test, build-image]
     if: needs.test.result == 'success' && needs.build-image.result == 'success'

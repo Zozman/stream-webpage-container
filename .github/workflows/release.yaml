@@ -1,0 +1,127 @@
+# Release Image Workflow
+# This workflow triggers on version tags (v*) and either:
+# 1. Re-tags an existing edge image with the same SHA, or
+# 2. Builds a new image if no matching edge image exists
+# Then it creates a GitHub release with the image details.
+name: Create Release For Version
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  wait-for-edge:
+    name: Wait for Edge Workflows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Edge workflows to complete
+        uses: lewagon/wait-on-check-action@v1.4.0
+        with:
+          ref: ${{ github.sha }}
+          check-name: 'edge'  # Job name from edge.yaml
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+          allowed-conclusions: success,failure,cancelled,skipped
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: wait-for-edge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check If Image Exists For This SHA
+        id: check_image
+        run: |
+          echo "Checking for edge image with SHA: ${{ github.sha }}"
+          
+          # Check if image with current SHA exists
+          if docker manifest inspect ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }} >/dev/null 2>&1; then
+            echo "Edge image found for SHA ${{ github.sha }}"
+            echo "image_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No edge image found for SHA ${{ github.sha }}"
+            echo "image_exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Re-tag Existing Image
+        if: steps.check_image.outputs.image_exists == 'true'
+        run: |
+          echo "Re-tagging existing image..."
+          
+          # Pull the existing image
+          docker pull ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }}
+          
+          # Tag with latest and version
+          docker tag ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }} ghcr.io/zozman/stream-webpage-container:latest
+          docker tag ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }} ghcr.io/zozman/stream-webpage-container:${{ github.ref_name }}
+          
+          # Push the new tags
+          docker push ghcr.io/zozman/stream-webpage-container:latest
+          docker push ghcr.io/zozman/stream-webpage-container:${{ github.ref_name }}
+
+      - name: Generate Docker Metadata For New Build
+        if: steps.check_image.outputs.image_exists == 'false'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/zozman/stream-webpage-container
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ github.ref_name }}
+            type=sha
+            type=sha,format=long
+
+      - name: Build & Push New Docker Image
+        if: steps.check_image.outputs.image_exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          platforms: linux/amd64
+          context: .
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Docker Actions Summary
+        run: |
+          if [ "${{ steps.check_image.outputs.image_exists }}" == "true" ]; then
+            echo "✅ Successfully re-tagged existing edge image"
+            echo "🏷️  Tags: latest, ${{ github.ref_name }}"
+          else
+            echo "✅ Successfully built and tagged new image"
+            echo "🏷️  Tags: latest, ${{ github.ref_name }}, sha-${{ github.sha }}, sha-$(echo ${{ github.sha }} | cut -c1-12)"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## Release ${{ github.ref_name }}
+            
+            🐳 **Docker Images:**
+            - `ghcr.io/zozman/stream-webpage-container:latest`
+            - `ghcr.io/zozman/stream-webpage-container:${{ github.ref_name }}`
+            
+            📝 **Image Details:**
+            - **SHA:** `${{ github.sha }}`
+            - **Built from:** ${{ steps.check_image.outputs.image_exists == 'true' && 'Re-tagged existing edge image' || 'Freshly built image' }}
+            
+            ## What's Changed
+            See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes.
+          draft: false
+          prerelease: false
+          generate_release_notes: true

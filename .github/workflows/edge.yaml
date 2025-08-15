@@ -8,7 +8,8 @@ on:
       - main
 
 jobs:
-  push:
+  edge:
+    name: Build Edge Image
     runs-on: ubuntu-latest
     steps:
       - name: Set up Docker Buildx
