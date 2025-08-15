@@ -9,6 +9,37 @@ A containerized application to stream a webpage live over RTMP.  Just pass a `WE
 - Setting up a way to broadcast an overlay [like YarpBot does for its status page](https://www.twitch.tv/yarpbot) without a GUI client.
 - Other.... stuff (you figure it out).
 
+## Dependencies
+
+1. [Docker](https://www.docker.com/) (or some other container runtime like [containerd](https://containerd.io/))
+2. .....That's it.  Why did we make this a list?
+
+## Quick Start
+
+### Start A Stream Using Default Settings (720p 30 FPS)
+
+`docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to ghcr.io/zozman/stream-webpage-container`
+
+### Start A Stream At 1080p 60 FPS
+
+`docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to -e RESOLUTION=720p -e FRAMERATE=60 ghcr.io/zozman/stream-webpage-container`
+
+## Available Image Tags
+
+> [!NOTE]
+> All available images can be found on the repo's [container package](https://github.com/Zozman/stream-webpage-container/pkgs/container/stream-webpage-container) page.
+
+- `latest`
+   - Represents the latest [release](https://github.com/Zozman/stream-webpage-container/releases) and should be what you use if you don't know what to use.
+- `v*`
+   - Example: `v1.0.0`
+   - Represents a specific [release](https://github.com/Zozman/stream-webpage-container/releases) and is the right choice if you want to update versions manually.
+- `edge`
+   - Represents the latest commit to `main` and is not recommended for daily use unless you want the latest build NOW.
+- `sha-*`
+   - Examples: `sha-df87ff2ac624eb2de65861dfa3b09844a3f0f3db`, `sha-df87ff2`
+   - Every commit to `main` will have a tag corresponding to that commit's long and short SHA.
+
 ## Running From Source
 
 > [!NOTE]
