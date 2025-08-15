@@ -19,7 +19,7 @@ jobs:
         uses: lewagon/wait-on-check-action@v1.4.0
         with:
           ref: ${{ github.sha }}
-          check-name: 'edge'  # Job name from edge.yaml
+          check-name: 'Build Edge Image'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
           allowed-conclusions: success,failure,cancelled,skipped
