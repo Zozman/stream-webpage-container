@@ -1,5 +1,5 @@
 # Setup base
-FROM golang:1.24.6 AS base
+FROM golang:1.25.0 AS base
     WORKDIR /app
     COPY ./go.mod ./
     COPY ./go.sum ./
