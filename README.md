@@ -1,6 +1,6 @@
 # Stream Webpage Container
 
-A containerized application to stream a webpage live over RTMP.  Just pass a `WEBPAGE_URL` and a `RTMP_URL` and the container will open a browser, capture the video and audio, and send it to the specified location.  It can even be configured to automatically restart the stream for supported services.
+A containerized application to stream a webpage live over RTMP.  Just pass a `WEBPAGE_URL` and a `RTMP_URL` and the container will open a browser, capture the video and audio, and send it to the specified location.  It can even be configured to automatically restart the stream for supported services when the service stops the stream.
 
 ## Uses
 
