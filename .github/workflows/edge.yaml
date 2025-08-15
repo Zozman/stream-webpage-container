@@ -2,6 +2,9 @@
 # This workflow builds and pushes the edge image for the Stream Webpage Container on merge to the main branch.
 name: Edge Image Build
 
+concurrency:
+  group: edge-build
+
 on:
   push:
     branches:
