@@ -4,6 +4,7 @@
 # 2. Builds a new image if no matching edge image exists
 # Then it creates a GitHub release with the image details.
 name: Create Release For Version
+run-name: Release ${{ github.ref_name }}
 
 on:
   push:
