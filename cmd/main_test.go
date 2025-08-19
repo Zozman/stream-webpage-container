@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"syscall"
 	"testing"
 
 	"go.uber.org/zap"
@@ -360,6 +361,50 @@ func TestGetDisplayInfo(t *testing.T) {
 		}
 		if display != ":0" {
 			t.Errorf("Expected default display ':0', got %q", display)
+		}
+	})
+}
+
+func TestCleanupChromeProcesses(t *testing.T) {
+	t.Run("Chrome Process Cleanup Function", func(t *testing.T) {
+		logger, _ := zap.NewDevelopment()
+		
+		// This test just ensures the function doesn't crash
+		// In a real environment, it would clean up Chrome processes
+		cleanupChromeProcesses(logger)
+		
+		// If we reach here, the function completed without panicking
+		// which is what we want to verify
+	})
+}
+
+func TestStopStreamWithProcessGroup(t *testing.T) {
+	t.Cleanup(resetGlobalStreamState)
+
+	t.Run("Stop Stream With Process Group Cleanup", func(t *testing.T) {
+		logger, _ := zap.NewDevelopment()
+		
+		// Create a mock command (sleep command that won't actually run long)
+		cmd := exec.Command("sleep", "0.1")
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Start()
+		
+		// Set up stream state with the mock command
+		globalStreamState.mu.Lock()
+		globalStreamState.isRunning = true
+		globalStreamState.ffmpegCmd = cmd
+		globalStreamState.mu.Unlock()
+		
+		// Test that stopStream can handle process group cleanup
+		globalStreamState.stopStream(logger)
+		
+		// Verify the stream state is cleaned up
+		if globalStreamState.isStreamRunning() {
+			t.Error("Expected stream to be stopped")
+		}
+		
+		if globalStreamState.ffmpegCmd != nil {
+			t.Error("Expected ffmpegCmd to be nil after stopping")
 		}
 	})
 }

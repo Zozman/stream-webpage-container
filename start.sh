@@ -105,5 +105,16 @@ done
 echo "✓ PulseAudio is responding"
 
 echo "=== All Dependencies Ready - Starting Application ==="
+
+# Set memory management environment variables
+export GOMEMLIMIT="512MiB"  # Limit Go memory usage
+export GOGC=100             # Standard garbage collection target
+
+# Cleanup any existing processes to free memory
+echo "Cleaning up any existing processes..."
+pkill -f chrome 2>/dev/null || true
+pkill -f chromium 2>/dev/null || true
+pkill -f ffmpeg 2>/dev/null || true
+
 # Start the stream application
 exec /stream
