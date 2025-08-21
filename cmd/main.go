@@ -37,6 +37,8 @@ const (
 	DefaultFramerate = "30"
 	// Default cron string for checking stream status
 	DefaultCheckStreamCronString = "*/10 * * * *" // Every 10 minutes
+	// Default Chrome restart interval in minutes (0 = disabled)
+	DefaultChromeRestartInterval = 60 // 60 minutes
 )
 
 // Struct that represents the current state of the stream
@@ -173,6 +175,8 @@ type Config struct {
 	Width int
 	// Computed height based on resolution
 	Height int
+	// Chrome restart interval in minutes (0 = disabled)
+	ChromeRestartInterval int
 }
 
 func main() {
@@ -296,6 +300,17 @@ func loadConfig(ctx context.Context) (*Config, error) {
 		Framerate:  utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate),
 	}
 
+	// Parse Chrome restart interval
+	chromeRestartIntervalStr := utils.GetEnvOrDefault("CHROME_RESTART_INTERVAL", fmt.Sprintf("%d", DefaultChromeRestartInterval))
+	chromeRestartInterval, err := strconv.Atoi(chromeRestartIntervalStr)
+	if err != nil || chromeRestartInterval < 0 {
+		logger.Warn("Invalid Chrome restart interval, defaulting", 
+			zap.String("value", chromeRestartIntervalStr), 
+			zap.Int("default", DefaultChromeRestartInterval))
+		chromeRestartInterval = DefaultChromeRestartInterval
+	}
+	config.ChromeRestartInterval = chromeRestartInterval
+
 	// Validate and set framerate
 	originalFramerate := config.Framerate
 	switch config.Framerate {
@@ -328,6 +343,13 @@ func loadConfig(ctx context.Context) (*Config, error) {
 		config.Height = 720
 	}
 
+	// Log Chrome restart configuration
+	if config.ChromeRestartInterval > 0 {
+		logger.Info("Chrome restart enabled", zap.Int("interval_minutes", config.ChromeRestartInterval))
+	} else {
+		logger.Info("Chrome restart disabled")
+	}
+
 	return config, nil
 }
 
@@ -346,6 +368,91 @@ func streamWebpage(ctx context.Context, config *Config) error {
 	// Create a cancellable context for this stream session
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
+
+	// Start streaming with Chrome restart support
+	return streamWithChromeRestart(streamCtx, config, streamCancel)
+}
+
+// Function to handle streaming with periodic Chrome restarts for memory management
+func streamWithChromeRestart(ctx context.Context, config *Config, streamCancel context.CancelFunc) error {
+	logger := utils.GetLoggerFromContext(ctx)
+
+	var chromeCancel context.CancelFunc
+	var displayInfo string
+	var err error
+
+	// Start initial Chrome session
+	chromeCancel, displayInfo, err = startChromeSession(ctx, config)
+	if err != nil {
+		return err
+	}
+
+	// Set up Chrome restart timer if enabled
+	var chromeRestartTicker *time.Ticker
+	if config.ChromeRestartInterval > 0 {
+		chromeRestartTicker = time.NewTicker(time.Duration(config.ChromeRestartInterval) * time.Minute)
+		defer chromeRestartTicker.Stop()
+		logger.Info("Chrome restart timer started", zap.Int("interval_minutes", config.ChromeRestartInterval))
+	}
+
+	// Start FFmpeg stream
+	err = startFFmpegStream(ctx, config, displayInfo, streamCancel, chromeCancel)
+	if err != nil {
+		if chromeCancel != nil {
+			chromeCancel()
+		}
+		return err
+	}
+
+	// Handle Chrome restarts if enabled
+	if chromeRestartTicker != nil {
+		go func() {
+			for {
+				select {
+				case <-chromeRestartTicker.C:
+					logger.Info("Performing periodic Chrome restart to manage memory")
+					
+					// Cancel current Chrome session
+					if chromeCancel != nil {
+						chromeCancel()
+					}
+					
+					// Wait a moment for cleanup
+					time.Sleep(2 * time.Second)
+					
+					// Start new Chrome session
+					newChromeCancel, newDisplayInfo, restartErr := startChromeSession(ctx, config)
+					if restartErr != nil {
+						logger.Error("Failed to restart Chrome session", zap.Error(restartErr))
+						// Continue with old session if restart fails
+						continue
+					}
+					
+					// Update display info and cancel function
+					chromeCancel = newChromeCancel
+					displayInfo = newDisplayInfo
+					
+					// Update global stream state with new Chrome cancel function
+					globalStreamState.mu.Lock()
+					if globalStreamState.isRunning {
+						globalStreamState.chromeCancel = newChromeCancel
+					}
+					globalStreamState.mu.Unlock()
+					
+					logger.Info("Chrome session restarted successfully")
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	return nil
+}
+
+// Function to start a Chrome session and return the cancel function and display info
+func startChromeSession(ctx context.Context, config *Config) (context.CancelFunc, string, error) {
+	logger := utils.GetLoggerFromContext(ctx)
 
 	// Create Chrome context with options for screen capture
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -366,14 +473,21 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("mute-audio", false),
 		chromedp.Flag("window-position", "0,0"),
+		// Memory management flags to mitigate memory leaks
+		chromedp.Flag("memory-pressure-off", true),
+		chromedp.Flag("max_old_space_size", "2048"), // Limit V8 heap to 2GB
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-features", "TranslateUI,VizDisplayCompositor"),
+		chromedp.Flag("aggressive-cache-discard", true),
 		chromedp.WindowSize(config.Width, config.Height),
 	)
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(streamCtx, opts...)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()
 
 	chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
-	defer chromeCancel()
 
 	// Start Chrome and navigate to webpage
 	logger.Info("Starting Chrome browser", zap.String("url", config.WebpageURL))
@@ -394,14 +508,16 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		chromedp.Navigate(config.WebpageURL),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 	); err != nil {
-		return fmt.Errorf("failed to navigate to webpage: %v", err)
+		chromeCancel()
+		return nil, "", fmt.Errorf("failed to navigate to webpage: %v", err)
 	}
 
 	// Log the page load result based on status code
 	if statusCode >= 200 && statusCode < 300 {
 		logger.Info("Page load completed successfully", zap.String("url", config.WebpageURL), zap.Int64("status_code", statusCode))
 	} else {
-		logger.Fatal("Page load failed with error status, terminating program", zap.String("url", config.WebpageURL), zap.Int64("status_code", statusCode))
+		chromeCancel()
+		return nil, "", fmt.Errorf("page load failed with status code %d", statusCode)
 	}
 
 	// Wait a moment for the page to fully load
@@ -410,13 +526,13 @@ func streamWebpage(ctx context.Context, config *Config) error {
 	// Get the display information to find where Chrome is running
 	displayInfo, err := getDisplayInfo()
 	if err != nil {
-		return fmt.Errorf("failed to get display info: %v", err)
+		chromeCancel()
+		return nil, "", fmt.Errorf("failed to get display info: %v", err)
 	}
 
 	logger.Debug("Display information", zap.String("display", displayInfo))
 
-	// Start FFmpeg to capture and stream
-	return startFFmpegStream(streamCtx, config, displayInfo, streamCancel, chromeCancel)
+	return chromeCancel, displayInfo, nil
 }
 
 // Function to get the display info generated by the start.sh script and feed it to FFmpeg

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"strconv"
 	"testing"
 
 	"go.uber.org/zap"
@@ -107,6 +108,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Setenv("RTMP_URL", "")
 		t.Setenv("RESOLUTION", "")
 		t.Setenv("FRAMERATE", "")
+		t.Setenv("CHROME_RESTART_INTERVAL", "")
 
 		logger, _ := zap.NewDevelopment()
 		ctx := utils.SaveLoggerToContext(context.Background(), logger)
@@ -128,6 +130,9 @@ func TestLoadConfig(t *testing.T) {
 		if config.Framerate != DefaultFramerate {
 			t.Errorf("Expected default framerate %q, got %q", DefaultFramerate, config.Framerate)
 		}
+		if config.ChromeRestartInterval != DefaultChromeRestartInterval {
+			t.Errorf("Expected default Chrome restart interval %d, got %d", DefaultChromeRestartInterval, config.ChromeRestartInterval)
+		}
 	})
 
 	t.Run("Custom Configuration", func(t *testing.T) {
@@ -135,11 +140,13 @@ func TestLoadConfig(t *testing.T) {
 		expectedRTMP := "rtmp://custom.example.com/live/test"
 		expectedResolution := "1080p"
 		expectedFramerate := "60"
+		expectedChromeRestartInterval := 120
 
 		t.Setenv("WEBPAGE_URL", expectedURL)
 		t.Setenv("RTMP_URL", expectedRTMP)
 		t.Setenv("RESOLUTION", expectedResolution)
 		t.Setenv("FRAMERATE", expectedFramerate)
+		t.Setenv("CHROME_RESTART_INTERVAL", strconv.Itoa(expectedChromeRestartInterval))
 
 		logger, _ := zap.NewDevelopment()
 		ctx := utils.SaveLoggerToContext(context.Background(), logger)
@@ -160,6 +167,9 @@ func TestLoadConfig(t *testing.T) {
 		}
 		if config.Framerate != expectedFramerate {
 			t.Errorf("Expected framerate %q, got %q", expectedFramerate, config.Framerate)
+		}
+		if config.ChromeRestartInterval != expectedChromeRestartInterval {
+			t.Errorf("Expected Chrome restart interval %d, got %d", expectedChromeRestartInterval, config.ChromeRestartInterval)
 		}
 	})
 
@@ -360,6 +370,73 @@ func TestGetDisplayInfo(t *testing.T) {
 		}
 		if display != ":0" {
 			t.Errorf("Expected default display ':0', got %q", display)
+		}
+	})
+}
+
+func TestChromeRestartConfiguration(t *testing.T) {
+	t.Run("Chrome Restart Disabled", func(t *testing.T) {
+		t.Setenv("CHROME_RESTART_INTERVAL", "0")
+
+		logger, _ := zap.NewDevelopment()
+		ctx := utils.SaveLoggerToContext(context.Background(), logger)
+
+		config, err := loadConfig(ctx)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+		if config.ChromeRestartInterval != 0 {
+			t.Errorf("Expected Chrome restart interval 0 (disabled), got %d", config.ChromeRestartInterval)
+		}
+	})
+
+	t.Run("Custom Chrome Restart Interval", func(t *testing.T) {
+		expectedInterval := 30
+		t.Setenv("CHROME_RESTART_INTERVAL", strconv.Itoa(expectedInterval))
+
+		logger, _ := zap.NewDevelopment()
+		ctx := utils.SaveLoggerToContext(context.Background(), logger)
+
+		config, err := loadConfig(ctx)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+		if config.ChromeRestartInterval != expectedInterval {
+			t.Errorf("Expected Chrome restart interval %d, got %d", expectedInterval, config.ChromeRestartInterval)
+		}
+	})
+
+	t.Run("Invalid Chrome Restart Interval Defaults", func(t *testing.T) {
+		t.Setenv("CHROME_RESTART_INTERVAL", "invalid")
+
+		logger, _ := zap.NewDevelopment()
+		ctx := utils.SaveLoggerToContext(context.Background(), logger)
+
+		config, err := loadConfig(ctx)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+		if config.ChromeRestartInterval != DefaultChromeRestartInterval {
+			t.Errorf("Expected Chrome restart interval to default to %d, got %d", DefaultChromeRestartInterval, config.ChromeRestartInterval)
+		}
+	})
+
+	t.Run("Negative Chrome Restart Interval Defaults", func(t *testing.T) {
+		t.Setenv("CHROME_RESTART_INTERVAL", "-10")
+
+		logger, _ := zap.NewDevelopment()
+		ctx := utils.SaveLoggerToContext(context.Background(), logger)
+
+		config, err := loadConfig(ctx)
+
+		if err != nil {
+			t.Fatalf("Expected no error, got %v", err)
+		}
+		if config.ChromeRestartInterval != DefaultChromeRestartInterval {
+			t.Errorf("Expected Chrome restart interval to default to %d, got %d", DefaultChromeRestartInterval, config.ChromeRestartInterval)
 		}
 	})
 }
