@@ -112,6 +112,10 @@ To enable status checking for Twitch, provide a `TWITCH_CHANNEL`, `TWITCH_CLIENT
 
 ## Environmental Variables
 
+- `CHROME_RESTART_INTERVAL`
+   - Integer
+   - Default: `60`
+   - Chrome restart interval in minutes for memory management. Set to `0` to disable periodic Chrome restarts. Recommended values are between 30-120 minutes depending on the memory usage characteristics of the webpage being streamed.
 - `FRAMERATE`
    - Enum
       - `30`
