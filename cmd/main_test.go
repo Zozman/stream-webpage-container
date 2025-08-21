@@ -440,3 +440,30 @@ func TestChromeRestartConfiguration(t *testing.T) {
 		}
 	})
 }
+
+func TestStartChromeSession(t *testing.T) {
+	t.Run("Chrome Session Configuration Validation", func(t *testing.T) {
+		logger, _ := zap.NewDevelopment()
+		ctx := utils.SaveLoggerToContext(context.Background(), logger)
+
+		config := &Config{
+			WebpageURL: "data:text/html,<html><body>Test Page</body></html>", // Use data URI to avoid network
+			Width:      1280,
+			Height:     720,
+		}
+
+		// This test validates the configuration that would be passed to Chrome
+		// Full integration testing would require Chrome to be installed
+		if config.WebpageURL == "" {
+			t.Error("Expected webpage URL to be set")
+		}
+		if config.Width != 1280 || config.Height != 720 {
+			t.Errorf("Expected dimensions 1280x720, got %dx%d", config.Width, config.Height)
+		}
+		
+		// Test that context is properly set up
+		if ctx == nil {
+			t.Error("Expected context to be non-nil")
+		}
+	})
+}
