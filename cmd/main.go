@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 	"github.com/nicklaw5/helix/v2"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -384,30 +383,12 @@ func streamWebpage(ctx context.Context, config *Config) error {
 	// Start Chrome and navigate to webpage
 	logger.Info("Starting Chrome browser", zap.String("url", config.WebpageURL))
 
-	// Capture the status code when the page loads
-	var statusCode int64
-	chromedp.ListenTarget(chromeCtx, func(ev interface{}) {
-		switch ev := ev.(type) {
-		case *network.EventResponseReceived:
-			if ev.Response.URL == config.WebpageURL {
-				statusCode = ev.Response.Status
-			}
-		}
-	})
-
 	// Load the page
 	if err := chromedp.Run(chromeCtx,
 		chromedp.Navigate(config.WebpageURL),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 	); err != nil {
 		return fmt.Errorf("failed to navigate to webpage: %v", err)
-	}
-
-	// Log the page load result based on status code
-	if statusCode >= 200 && statusCode < 300 {
-		logger.Info("Page load completed successfully", zap.String("url", config.WebpageURL), zap.Int64("status_code", statusCode))
-	} else {
-		logger.Fatal("Page load failed with error status, terminating program", zap.String("url", config.WebpageURL), zap.Int64("status_code", statusCode))
 	}
 
 	// Wait a moment for the page to fully load
