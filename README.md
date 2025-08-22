@@ -169,6 +169,9 @@ To enable status checking for Twitch, provide a `TWITCH_CHANNEL`, `TWITCH_CLIENT
    - Twitch Client ID obtained from the [Twitch Developer Console](https://dev.twitch.tv/console) for checking stream status if the `TWITCH_CHANNEL` environmental variable is set.
    - Checking for the stream status on Twitch will not work without this and `TWITCH_CLIENT_ID` being set.
    - For more information about registering an app on Twitch, see [the developer documentation](https://dev.twitch.tv/docs/authentication/register-app/).
+- `WEBPAGE_REFRESH_INTERVAL`
+   - String
+   - If set to a positive integer, the browser will automatically refresh the webpage at the specified interval in seconds. This can help prevent issues with stale content or memory leaks during long streaming sessions, as a memory can build if the `WEBPAGE_URL` location has memory leaks. If not set or set to an invalid value, automatic refresh is disabled.
 - `WEBPAGE_URL`
    - String
    - Default: `https://google.com`

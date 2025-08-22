@@ -366,6 +366,12 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("mute-audio", false),
 		chromedp.Flag("window-position", "0,0"),
+		chromedp.Flag("memory-pressure-off", true),
+		chromedp.Flag("disable-background-timer-throttling", true),
+		chromedp.Flag("disable-renderer-backgrounding", true),
+		chromedp.Flag("disable-backgrounding-occluded-windows", true),
+		chromedp.Flag("disable-features", "TranslateUI,VizDisplayCompositor"),
+		chromedp.Flag("aggressive-cache-discard", true),
 		chromedp.WindowSize(config.Width, config.Height),
 	)
 
@@ -406,6 +412,41 @@ func streamWebpage(ctx context.Context, config *Config) error {
 
 	// Wait a moment for the page to fully load
 	time.Sleep(3 * time.Second)
+
+	// Check if automatic refresh is enabled via environment variable
+	refreshIntervalStr := utils.GetEnvOrDefault("WEBPAGE_REFRESH_INTERVAL", "")
+	if refreshIntervalStr != "" {
+		refreshInterval, err := strconv.Atoi(refreshIntervalStr)
+		if err != nil || refreshInterval <= 0 {
+			logger.Warn("Invalid WEBPAGE_REFRESH_INTERVAL value, automatic refresh disabled",
+				zap.String("invalidValue", refreshIntervalStr), zap.Error(err))
+		} else {
+			logger.Info("Enabling automatic browser refresh",
+				zap.Int("refreshInterval", refreshInterval))
+
+			go func() {
+				ticker := time.NewTicker(time.Duration(refreshInterval) * time.Second)
+				defer ticker.Stop()
+
+				for {
+					select {
+					case <-ticker.C:
+						logger.Info("Refreshing browser page", zap.String("url", config.WebpageURL))
+						if err := chromedp.Run(chromeCtx, chromedp.Reload()); err != nil {
+							logger.Error("Failed to refresh browser page", zap.Error(err))
+						} else {
+							logger.Debug("Browser page refreshed successfully")
+						}
+					case <-streamCtx.Done():
+						logger.Debug("Stream context cancelled, stopping browser refresh goroutine")
+						return
+					}
+				}
+			}()
+		}
+	} else {
+		logger.Debug("WEBPAGE_REFRESH_INTERVAL not set, automatic refresh disabled")
+	}
 
 	// Get the display information to find where Chrome is running
 	displayInfo, err := getDisplayInfo()
