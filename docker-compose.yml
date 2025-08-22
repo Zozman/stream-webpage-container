@@ -13,6 +13,7 @@ services:
       - TWITCH_CHANNEL=${TWITCH_CHANNEL}
       - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
       - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
+      - WEBPAGE_REFRESH_INTERVAL=${WEBPAGE_REFRESH_INTERVAL:-0}
       - WEBPAGE_URL=${WEBPAGE_URL:-https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs}
 
   # Image to run unit tests in
