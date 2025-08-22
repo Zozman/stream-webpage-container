@@ -63,18 +63,12 @@ jobs:
       - name: Re-tag Existing Image
         if: steps.check_image.outputs.image_exists == 'true'
         run: |
-          echo "Re-tagging existing image..."
+          echo "Re-tagging existing multi-platform image..."
           
-          # Pull the existing image
-          docker pull ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }}
-          
-          # Tag with latest and version
-          docker tag ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }} ghcr.io/zozman/stream-webpage-container:latest
-          docker tag ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }} ghcr.io/zozman/stream-webpage-container:${{ github.ref_name }}
-          
-          # Push the new tags
-          docker push ghcr.io/zozman/stream-webpage-container:latest
-          docker push ghcr.io/zozman/stream-webpage-container:${{ github.ref_name }}
+          # Use buildx imagetools to create new tags that reference the same multi-platform manifest
+          # This preserves both amd64 and arm64 platforms
+          docker buildx imagetools create --tag ghcr.io/zozman/stream-webpage-container:latest ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }}
+          docker buildx imagetools create --tag ghcr.io/zozman/stream-webpage-container:${{ github.ref_name }} ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }}
 
       - name: Generate Docker Metadata For New Build
         if: steps.check_image.outputs.image_exists == 'false'
