@@ -3,7 +3,7 @@ module github.com/Zozman/stream-webpage-container
 go 1.25.1
 
 require (
-	github.com/chromedp/chromedp v0.14.1
+	github.com/chromedp/chromedp v0.14.2
 	github.com/nicklaw5/helix/v2 v2.31.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/robfig/cron/v3 v3.0.1
