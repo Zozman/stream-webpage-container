@@ -4,7 +4,7 @@ go 1.25.1
 
 require (
 	github.com/chromedp/chromedp v0.14.1
-	github.com/nicklaw5/helix/v2 v2.31.1
+	github.com/nicklaw5/helix/v2 v2.32.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/robfig/cron/v3 v3.0.1
 	go.uber.org/zap v1.27.0
