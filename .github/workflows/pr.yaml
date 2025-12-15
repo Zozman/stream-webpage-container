@@ -63,7 +63,7 @@ jobs:
         cache-to: type=gha,mode=max
     
     - name: Upload Docker image artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: docker-image-${{ github.run_id }}
         path: /tmp/stream-webpage-${{ github.run_id }}.tar
