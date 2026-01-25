@@ -20,7 +20,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.25.5'
+        go-version-file: go.mod
 
     - name: Install dependencies
       run: go mod download
@@ -63,7 +63,7 @@ jobs:
         cache-to: type=gha,mode=max
     
     - name: Upload Docker image artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: docker-image-${{ github.run_id }}
         path: /tmp/stream-webpage-${{ github.run_id }}.tar
@@ -100,7 +100,7 @@ jobs:
       uses: actions/checkout@v6
     
     - name: Download Docker image artifact
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v7
       with:
         name: docker-image-${{ github.run_id }}
         path: /tmp
