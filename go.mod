@@ -1,6 +1,6 @@
 module github.com/Zozman/stream-webpage-container
 
-go 1.25.6
+go 1.26.0
 
 require (
 	github.com/chromedp/chromedp v0.14.2
@@ -26,6 +26,6 @@ require (
 	github.com/prometheus/procfs v0.19.2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
