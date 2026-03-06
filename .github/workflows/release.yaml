@@ -73,7 +73,7 @@ jobs:
       - name: Generate Docker Metadata For New Build
         if: steps.check_image.outputs.image_exists == 'false'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/zozman/stream-webpage-container
           tags: |
