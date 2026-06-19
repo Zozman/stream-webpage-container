@@ -10,7 +10,7 @@ FROM golang:1.26.2 AS base
 
 # Setup builder
 FROM base AS builder
-    RUN go build -o /stream ./cmd/main.go
+    RUN go build -o /stream ./cmd
 
 # Run using Chromium image with FFmpeg support
 FROM linuxserver/chromium:latest AS runner
