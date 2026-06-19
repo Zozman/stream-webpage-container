@@ -11,6 +11,11 @@ DISPLAY_BASE=${DISPLAY_BASE:-100}
 DISPLAY_MAP=""
 PRIMARY_DISPLAY=""
 
+if ! RENDER_TARGETS_OUTPUT=$(/stream render-targets 2>&1); then
+    echo "Failed to determine render targets: $RENDER_TARGETS_OUTPUT"
+    exit 1
+fi
+
 while IFS='|' read -r TARGET_NAME TARGET_WIDTH TARGET_HEIGHT; do
     if [ -z "$TARGET_NAME" ]; then
         continue
@@ -32,10 +37,10 @@ while IFS='|' read -r TARGET_NAME TARGET_WIDTH TARGET_HEIGHT; do
     DISPLAY_MAP="${DISPLAY_MAP}${TARGET_NAME}=${CURRENT_DISPLAY}"
 
     DISPLAY_BASE=$((DISPLAY_BASE + 1))
-done < <(/stream render-targets)
+done <<< "$RENDER_TARGETS_OUTPUT"
 
 if [ -z "$DISPLAY_MAP" ]; then
-    echo "Failed to determine render targets"
+    echo "Failed to determine render targets: no render targets were returned"
     exit 1
 fi
 

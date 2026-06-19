@@ -404,14 +404,7 @@ func streamWebpage(ctx context.Context, config *Config) error {
 	}
 
 	browserCancels := make([]context.CancelFunc, 0, len(config.RenderTargets)*2)
-	cleanupBrowsers := func() {
-		for index := len(browserCancels) - 1; index >= 0; index-- {
-			if browserCancels[index] != nil {
-				browserCancels[index]()
-			}
-		}
-	}
-	defer cleanupBrowsers()
+	defer cancelBrowserSessions(browserCancels)
 
 	for _, renderTarget := range config.RenderTargets {
 		target := renderTarget
@@ -497,6 +490,14 @@ func extractNumberFromBitrate(bitrate string) int {
 	return num
 }
 
+func cancelBrowserSessions(browserCancels []context.CancelFunc) {
+	for index := len(browserCancels) - 1; index >= 0; index-- {
+		if browserCancels[index] != nil {
+			browserCancels[index]()
+		}
+	}
+}
+
 // Function to start FFmpeg stream with the given configuration
 func startFFmpegStream(ctx context.Context, config *Config, streamCancel context.CancelFunc, browserCancels []context.CancelFunc) error {
 	logger := utils.GetLoggerFromContext(ctx)
@@ -552,11 +553,7 @@ func startFFmpegStream(ctx context.Context, config *Config, streamCancel context
 
 	// Clean up global stream state when done
 	defer func() {
-		for index := len(browserCancels) - 1; index >= 0; index-- {
-			if browserCancels[index] != nil {
-				browserCancels[index]()
-			}
-		}
+		cancelBrowserSessions(browserCancels)
 		globalStreamState.mu.Lock()
 		globalStreamState.isRunning = false
 		globalStreamState.cancelFunc = nil
