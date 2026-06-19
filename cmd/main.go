@@ -40,11 +40,11 @@ const (
 
 // Struct that represents the current state of the stream
 type StreamState struct {
-	mu           sync.RWMutex
-	isRunning    bool
-	cancelFunc   context.CancelFunc
-	chromeCancel context.CancelFunc
-	ffmpegCmd    *exec.Cmd
+	mu             sync.RWMutex
+	isRunning      bool
+	cancelFunc     context.CancelFunc
+	browserCancels []context.CancelFunc
+	ffmpegCmd      *exec.Cmd
 }
 
 // Health response structure
@@ -62,12 +62,12 @@ var (
 )
 
 // Function to set that the current stream is running and save the right objects into the StreamState
-func (s *StreamState) setStreamRunning(cancelFunc, chromeCancel context.CancelFunc, ffmpegCmd *exec.Cmd) {
+func (s *StreamState) setStreamRunning(cancelFunc context.CancelFunc, browserCancels []context.CancelFunc, ffmpegCmd *exec.Cmd) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.isRunning = true
 	s.cancelFunc = cancelFunc
-	s.chromeCancel = chromeCancel
+	s.browserCancels = append([]context.CancelFunc(nil), browserCancels...)
 	s.ffmpegCmd = ffmpegCmd
 }
 
@@ -82,10 +82,12 @@ func (s *StreamState) stopStream(logger *zap.Logger) {
 
 	logger.Info("Stopping existing stream...")
 
-	// Cancel Chrome context
-	if s.chromeCancel != nil {
-		logger.Debug("Cancelling Chrome context")
-		s.chromeCancel()
+	// Cancel active browser sessions
+	for index, browserCancel := range s.browserCancels {
+		if browserCancel != nil {
+			logger.Debug("Cancelling browser context", zap.Int("index", index))
+			browserCancel()
+		}
 	}
 
 	// Ask FFmpeg to terminate gracefully
@@ -119,7 +121,7 @@ func (s *StreamState) stopStream(logger *zap.Logger) {
 
 	s.isRunning = false
 	s.cancelFunc = nil
-	s.chromeCancel = nil
+	s.browserCancels = nil
 	s.ffmpegCmd = nil
 
 	logger.Info("Existing stream stopped")
@@ -172,9 +174,21 @@ type Config struct {
 	Width int
 	// Computed height based on resolution
 	Height int
+	// All stream variants to include in the enhanced RTMP output
+	Variants []StreamVariant
+	// Render targets needed to produce the configured variants
+	RenderTargets []RenderTarget
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == RenderTargetsCommand {
+		if err := printRenderTargets(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	logger := utils.GetLogger()
 
 	// Create context with logger
@@ -192,7 +206,9 @@ func main() {
 		zap.String("resolution", config.Resolution),
 		zap.String("framerate", config.Framerate),
 		zap.Int("width", config.Width),
-		zap.Int("height", config.Height))
+		zap.Int("height", config.Height),
+		zap.Int("variantCount", len(config.Variants)),
+		zap.Int("renderTargetCount", len(config.RenderTargets)))
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -284,6 +300,22 @@ func setupHTTPRoutes() {
 	http.HandleFunc("/health", getHealthResponse)
 }
 
+func printRenderTargets() error {
+	logger := zap.NewNop()
+	ctx := utils.SaveLoggerToContext(context.Background(), logger)
+
+	config, err := loadConfig(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, line := range renderTargetLines(config) {
+		fmt.Println(line)
+	}
+
+	return nil
+}
+
 // Function to load configuration from environment variables
 func loadConfig(ctx context.Context) (*Config, error) {
 	logger := utils.GetLoggerFromContext(ctx)
@@ -327,6 +359,19 @@ func loadConfig(ctx context.Context) (*Config, error) {
 		config.Height = 720
 	}
 
+	variants, renderTargets, err := loadVariants(ctx, config.Resolution, config.Framerate)
+	if err != nil {
+		return nil, err
+	}
+	config.Variants = variants
+	config.RenderTargets = renderTargets
+	if len(config.Variants) > 0 {
+		config.Resolution = config.Variants[0].Resolution
+		config.Framerate = config.Variants[0].Framerate
+		config.Width = config.Variants[0].Width
+		config.Height = config.Variants[0].Height
+	}
+
 	return config, nil
 }
 
@@ -346,109 +391,99 @@ func streamWebpage(ctx context.Context, config *Config) error {
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
 
-	// Create Chrome context with options for screen capture
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", false), // We need non-headless for video capture
-		chromedp.Flag("kiosk", true),
-		chromedp.Flag("disable-gpu", false),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-setuid-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-web-security", true),
-		chromedp.Flag("allow-running-insecure-content", true),
-		chromedp.Flag("autoplay-policy", "no-user-gesture-required"),
-		chromedp.Flag("use-fake-ui-for-media-stream", true),
-		chromedp.Flag("use-fake-device-for-media-stream", true),
-		chromedp.Flag("alsa-output-device", "pulse"),
-		chromedp.Flag("enable-features", "VaapiVideoDecoder"),
-		chromedp.Flag("enable-automation", false),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("mute-audio", false),
-		chromedp.Flag("window-position", "0,0"),
-		chromedp.Flag("memory-pressure-off", true),
-		chromedp.Flag("disable-background-timer-throttling", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-features", "TranslateUI,VizDisplayCompositor"),
-		chromedp.Flag("aggressive-cache-discard", true),
-		chromedp.WindowSize(config.Width, config.Height),
-	)
-
-	allocCtx, allocCancel := chromedp.NewExecAllocator(streamCtx, opts...)
-	defer allocCancel()
-
-	chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
-	defer chromeCancel()
-
-	// Start Chrome and navigate to webpage
-	logger.Info("Starting Chrome browser", zap.String("url", config.WebpageURL))
-
-	// Load the page
-	if err := chromedp.Run(chromeCtx,
-		chromedp.Navigate(config.WebpageURL),
-		chromedp.WaitVisible("body", chromedp.ByQuery),
-	); err != nil {
-		return fmt.Errorf("failed to navigate to webpage: %v", err)
+	if err := applyRenderTargetDisplays(config); err != nil {
+		return fmt.Errorf("failed to resolve render target displays: %v", err)
 	}
 
-	// Wait a moment for the page to fully load
-	time.Sleep(3 * time.Second)
+	refreshInterval, err := parseRefreshInterval(ctx)
+	if err != nil {
+		logger.Warn("Invalid WEBPAGE_REFRESH_INTERVAL value, automatic refresh disabled", zap.Error(err))
+		refreshInterval = 0
+	} else if refreshInterval > 0 {
+		logger.Info("Enabling automatic browser refresh", zap.Int("refreshInterval", refreshInterval))
+	}
 
-	// Check if automatic refresh is enabled via environment variable
-	refreshIntervalStr := utils.GetEnvOrDefault("WEBPAGE_REFRESH_INTERVAL", "")
-	if refreshIntervalStr != "" {
-		refreshInterval, err := strconv.Atoi(refreshIntervalStr)
-		if err != nil || refreshInterval <= 0 {
-			logger.Warn("Invalid WEBPAGE_REFRESH_INTERVAL value, automatic refresh disabled",
-				zap.String("invalidValue", refreshIntervalStr), zap.Error(err))
-		} else {
-			logger.Info("Enabling automatic browser refresh",
-				zap.Int("refreshInterval", refreshInterval))
+	browserCancels := make([]context.CancelFunc, 0, len(config.RenderTargets)*2)
+	cleanupBrowsers := func() {
+		for index := len(browserCancels) - 1; index >= 0; index-- {
+			if browserCancels[index] != nil {
+				browserCancels[index]()
+			}
+		}
+	}
+	defer cleanupBrowsers()
 
-			go func() {
+	for _, renderTarget := range config.RenderTargets {
+		target := renderTarget
+		opts := append(chromedp.DefaultExecAllocatorOptions[:],
+			chromedp.Flag("headless", false),
+			chromedp.Flag("kiosk", true),
+			chromedp.Flag("disable-gpu", false),
+			chromedp.Flag("no-sandbox", true),
+			chromedp.Flag("disable-setuid-sandbox", true),
+			chromedp.Flag("disable-dev-shm-usage", true),
+			chromedp.Flag("disable-web-security", true),
+			chromedp.Flag("allow-running-insecure-content", true),
+			chromedp.Flag("autoplay-policy", "no-user-gesture-required"),
+			chromedp.Flag("use-fake-ui-for-media-stream", true),
+			chromedp.Flag("use-fake-device-for-media-stream", true),
+			chromedp.Flag("alsa-output-device", "pulse"),
+			chromedp.Flag("enable-features", "VaapiVideoDecoder"),
+			chromedp.Flag("enable-automation", false),
+			chromedp.Flag("disable-blink-features", "AutomationControlled"),
+			chromedp.Flag("mute-audio", false),
+			chromedp.Flag("window-position", "0,0"),
+			chromedp.Flag("memory-pressure-off", true),
+			chromedp.Flag("disable-background-timer-throttling", true),
+			chromedp.Flag("disable-renderer-backgrounding", true),
+			chromedp.Flag("disable-backgrounding-occluded-windows", true),
+			chromedp.Flag("disable-features", "TranslateUI,VizDisplayCompositor"),
+			chromedp.Flag("aggressive-cache-discard", true),
+			chromedp.WindowSize(target.Width, target.Height),
+			chromedp.Env("DISPLAY="+target.Display),
+		)
+
+		allocCtx, allocCancel := chromedp.NewExecAllocator(streamCtx, opts...)
+		chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
+		browserCancels = append(browserCancels, chromeCancel, allocCancel)
+
+		logger.Info("Starting Chrome browser",
+			zap.String("url", config.WebpageURL),
+			zap.String("renderTarget", target.Name),
+			zap.String("display", target.Display),
+			zap.Int("width", target.Width),
+			zap.Int("height", target.Height))
+
+		if err := chromedp.Run(chromeCtx,
+			chromedp.Navigate(config.WebpageURL),
+			chromedp.WaitVisible("body", chromedp.ByQuery),
+		); err != nil {
+			return fmt.Errorf("failed to navigate to webpage for render target %q: %v", target.Name, err)
+		}
+
+		if refreshInterval > 0 {
+			go func(renderTargetName string, renderCtx context.Context) {
 				ticker := time.NewTicker(time.Duration(refreshInterval) * time.Second)
 				defer ticker.Stop()
 
 				for {
 					select {
 					case <-ticker.C:
-						logger.Info("Refreshing browser page", zap.String("url", config.WebpageURL))
-						if err := chromedp.Run(chromeCtx, chromedp.Reload()); err != nil {
-							logger.Error("Failed to refresh browser page", zap.Error(err))
-						} else {
-							logger.Debug("Browser page refreshed successfully")
+						logger.Info("Refreshing browser page", zap.String("url", config.WebpageURL), zap.String("renderTarget", renderTargetName))
+						if err := chromedp.Run(renderCtx, chromedp.Reload()); err != nil {
+							logger.Error("Failed to refresh browser page", zap.String("renderTarget", renderTargetName), zap.Error(err))
 						}
 					case <-streamCtx.Done():
-						logger.Debug("Stream context cancelled, stopping browser refresh goroutine")
 						return
 					}
 				}
-			}()
+			}(target.Name, chromeCtx)
 		}
-	} else {
-		logger.Debug("WEBPAGE_REFRESH_INTERVAL not set, automatic refresh disabled")
 	}
 
-	// Get the display information to find where Chrome is running
-	displayInfo, err := getDisplayInfo()
-	if err != nil {
-		return fmt.Errorf("failed to get display info: %v", err)
-	}
+	time.Sleep(3 * time.Second)
 
-	logger.Debug("Display information", zap.String("display", displayInfo))
-
-	// Start FFmpeg to capture and stream
-	return startFFmpegStream(streamCtx, config, displayInfo, streamCancel, chromeCancel)
-}
-
-// Function to get the display info generated by the start.sh script and feed it to FFmpeg
-func getDisplayInfo() (string, error) {
-	// Try to get the DISPLAY environment variable
-	display := os.Getenv("DISPLAY")
-	if display == "" {
-		display = ":0" // Default X11 display
-	}
-	return display, nil
+	return startFFmpegStream(streamCtx, config, streamCancel, browserCancels)
 }
 
 // Helper function to extract numeric value from bitrate string (e.g., "3000k" -> 3000)
@@ -463,86 +498,14 @@ func extractNumberFromBitrate(bitrate string) int {
 }
 
 // Function to start FFmpeg stream with the given configuration
-func startFFmpegStream(ctx context.Context, config *Config, display string, streamCancel, chromeCancel context.CancelFunc) error {
+func startFFmpegStream(ctx context.Context, config *Config, streamCancel context.CancelFunc, browserCancels []context.CancelFunc) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
 	logger.Info("Starting FFmpeg stream")
 
-	// Calculate keyframe interval for 2 seconds (GOP size = framerate * 2)
-	framerate := config.Framerate
-	framerateInt, err := strconv.Atoi(framerate)
+	args, err := buildFFmpegArgs(config)
 	if err != nil {
-		logger.Error("Invalid framerate, defaulting to 30", zap.String("framerate", framerate), zap.Error(err))
-		framerateInt = 30 // Default to 30
-	}
-	keyframeInterval := fmt.Sprintf("%d", framerateInt*2)
-
-	// Set bitrate based on Twitch recommendations for resolution and framerate
-	// References: https://help.twitch.tv/s/article/broadcasting-guidelines?language=en_US
-	//             https://help.twitch.tv/s/article/stream-quality?language=en_US#how-to-stream
-	var videoBitrate string
-	audioBitrate := "160k" // Always use 160k for audio
-
-	// Compute the bitrate based on resolution and framerate
-	switch strings.ToLower(config.Resolution) {
-	case "720p":
-		if framerateInt >= 60 {
-			videoBitrate = "4000k" // 720p 60fps: 4000 kbps
-		} else {
-			videoBitrate = "3000k" // 720p 30fps: 3000 kbps
-		}
-	case "1080p":
-		if framerateInt >= 60 {
-			videoBitrate = "6000k" // 1080p 60fps: 6000 kbps
-		} else {
-			videoBitrate = "4500k" // 1080p 30fps: 4500 kbps
-		}
-	case "2k":
-		if framerateInt >= 60 {
-			videoBitrate = "8500k" // 2K 60fps: 8500 kbps (Twitch max for non-partners)
-		} else {
-			videoBitrate = "6000k" // 2K 30fps: 6000 kbps
-		}
-	default:
-		// Default to 720p 30fps settings
-		videoBitrate = "3000k"
-	}
-
-	// Buffer size should be 2x the video bitrate
-	bufferSize := fmt.Sprintf("%dk", (extractNumberFromBitrate(videoBitrate) * 2))
-
-	logger.Debug("Starting Stream Using FFmpeg",
-		zap.String("resolution", config.Resolution),
-		zap.String("framerate", config.Framerate),
-		zap.String("videoBitrate", videoBitrate),
-		zap.String("audioBitrate", audioBitrate),
-		zap.String("bufferSize", bufferSize))
-
-	// FFmpeg command to capture screen and audio, then stream to RTMP
-	args := []string{
-		"-f", "x11grab",
-		"-video_size", fmt.Sprintf("%dx%d", config.Width, config.Height),
-		"-framerate", config.Framerate,
-		"-draw_mouse", "0", // Hide mouse cursor
-		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offset
-		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
-		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)
-		"-map", "0:v", // Explicitly map video from input 0 (x11grab)
-		"-map", "1:a", // Explicitly map audio from input 1 (alsa)
-		"-vf", "crop=in_w:in_h:0:0", // Crop to exact dimensions
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-tune", "zerolatency",
-		"-crf", "23",
-		"-maxrate", videoBitrate,
-		"-bufsize", bufferSize,
-		"-pix_fmt", "yuv420p",
-		"-g", keyframeInterval, // Set GOP size for 2-second keyframe interval
-		"-c:a", "aac",
-		"-b:a", audioBitrate,
-		"-ar", "44100",
-		"-f", "flv",
-		config.RTMPURL,
+		return err
 	}
 
 	zapWriter := &zapio.Writer{Log: logger, Level: zap.DebugLevel}
@@ -580,7 +543,7 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 	}()
 
 	// Register this stream as running
-	globalStreamState.setStreamRunning(streamCancel, chromeCancel, cmd)
+	globalStreamState.setStreamRunning(streamCancel, browserCancels, cmd)
 
 	logger.Debug("FFmpeg started successfully, streaming...")
 
@@ -589,10 +552,15 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 
 	// Clean up global stream state when done
 	defer func() {
+		for index := len(browserCancels) - 1; index >= 0; index-- {
+			if browserCancels[index] != nil {
+				browserCancels[index]()
+			}
+		}
 		globalStreamState.mu.Lock()
 		globalStreamState.isRunning = false
 		globalStreamState.cancelFunc = nil
-		globalStreamState.chromeCancel = nil
+		globalStreamState.browserCancels = nil
 		globalStreamState.ffmpegCmd = nil
 		globalStreamState.mu.Unlock()
 	}()

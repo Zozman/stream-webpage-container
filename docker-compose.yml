@@ -8,6 +8,7 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-debug}
       - PORT=${PORT:-8080}
       - STATUS_CRON_SCHEDULE=${STATUS_CRON_SCHEDULE}
+      - STREAM_VARIANTS=${STREAM_VARIANTS}
       - RESOLUTION=${RESOLUTION:-720p}
       - RTMP_URL=${RTMP_URL:-rtmp://rtmp-server:1935/live/stream}
       - TWITCH_CHANNEL=${TWITCH_CHANNEL}

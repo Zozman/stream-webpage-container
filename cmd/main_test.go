@@ -19,7 +19,7 @@ func resetGlobalStreamState() {
 	defer globalStreamState.mu.Unlock()
 	globalStreamState.isRunning = false
 	globalStreamState.cancelFunc = nil
-	globalStreamState.chromeCancel = nil
+	globalStreamState.browserCancels = nil
 	globalStreamState.ffmpegCmd = nil
 }
 
@@ -68,7 +68,7 @@ func TestIsStreamRunning(t *testing.T) {
 		defer chromeCancel()
 
 		mockCmd := &exec.Cmd{}
-		globalStreamState.setStreamRunning(cancel, chromeCancel, mockCmd)
+		globalStreamState.setStreamRunning(cancel, []context.CancelFunc{chromeCancel}, mockCmd)
 
 		if !IsStreamRunning() {
 			t.Error("Expected stream to be running after setting global state")
@@ -87,7 +87,7 @@ func TestStopCurrentStream(t *testing.T) {
 		_, cancel := context.WithCancel(context.Background())
 		_, chromeCancel := context.WithCancel(context.Background())
 		mockCmd := &exec.Cmd{}
-		globalStreamState.setStreamRunning(cancel, chromeCancel, mockCmd)
+		globalStreamState.setStreamRunning(cancel, []context.CancelFunc{chromeCancel}, mockCmd)
 
 		if !globalStreamState.isRunning {
 			t.Fatal("Expected stream to be running before stopping")
@@ -335,31 +335,38 @@ func TestExtractNumberFromBitrate(t *testing.T) {
 	})
 }
 
-func TestGetDisplayInfo(t *testing.T) {
-	t.Run("Display From Environment Variable", func(t *testing.T) {
-		expectedDisplay := ":1"
-		t.Setenv("DISPLAY", expectedDisplay)
+func TestApplyRenderTargetDisplays(t *testing.T) {
+	t.Run("Single Render Target Uses DISPLAY Fallback", func(t *testing.T) {
+		t.Setenv(StreamRenderDisplays, "")
+		t.Setenv("DISPLAY", ":42")
 
-		display, err := getDisplayInfo()
+		config := &Config{
+			RenderTargets: []RenderTarget{{Name: "default"}},
+		}
 
-		if err != nil {
+		if err := applyRenderTargetDisplays(config); err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
-		if display != expectedDisplay {
-			t.Errorf("Expected display %q, got %q", expectedDisplay, display)
+		if config.RenderTargets[0].Display != ":42" {
+			t.Fatalf("Expected fallback display :42, got %q", config.RenderTargets[0].Display)
 		}
 	})
 
-	t.Run("Default Display When Environment Variable Not Set", func(t *testing.T) {
-		t.Setenv("DISPLAY", "")
+	t.Run("Multiple Render Targets Require Explicit Mapping", func(t *testing.T) {
+		t.Setenv(StreamRenderDisplays, "landscape=:100,portrait=:101")
 
-		display, err := getDisplayInfo()
+		config := &Config{
+			RenderTargets: []RenderTarget{
+				{Name: "landscape"},
+				{Name: "portrait"},
+			},
+		}
 
-		if err != nil {
+		if err := applyRenderTargetDisplays(config); err != nil {
 			t.Fatalf("Expected no error, got %v", err)
 		}
-		if display != ":0" {
-			t.Errorf("Expected default display ':0', got %q", display)
+		if config.RenderTargets[0].Display != ":100" || config.RenderTargets[1].Display != ":101" {
+			t.Fatalf("Unexpected display assignments: %#v", config.RenderTargets)
 		}
 	})
 }

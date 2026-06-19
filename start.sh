@@ -1,47 +1,58 @@
 #!/bin/bash
 set -e
 
-echo "=== Setting Up Display ==="
+echo "=== Setting Up Displays ==="
 
 # Clean up any existing X server and choose a random display
 pkill Xvfb || true
 rm -f /tmp/.X*-lock
-DISPLAY_NUM=$((RANDOM % 100 + 100))  # Random display between 100-199
-export DISPLAY=:$DISPLAY_NUM
 
-# Set screen resolution from environment variable or default to 720p
-RESOLUTION=${RESOLUTION:-"720p"}
-echo "Using resolution setting: $RESOLUTION"
+DISPLAY_BASE=${DISPLAY_BASE:-100}
+DISPLAY_MAP=""
+PRIMARY_DISPLAY=""
 
-# Map resolution names to pixel dimensions
-case $RESOLUTION in
-    "720p")
-        SCREEN_RESOLUTION="1280x720"
-        ;;
-    "1080p")
-        SCREEN_RESOLUTION="1920x1080"
-        ;;
-    "2k")
-        SCREEN_RESOLUTION="2560x1440"
-        ;;
-    *)
-        echo "Warning: Unknown resolution '$RESOLUTION', defaulting to 720p"
-        SCREEN_RESOLUTION="1280x720"
-        ;;
-esac
+while IFS='|' read -r TARGET_NAME TARGET_WIDTH TARGET_HEIGHT; do
+    if [ -z "$TARGET_NAME" ]; then
+        continue
+    fi
 
-echo "Using screen resolution: $SCREEN_RESOLUTION"
+    CURRENT_DISPLAY=":$DISPLAY_BASE"
+    SCREEN_RESOLUTION="${TARGET_WIDTH}x${TARGET_HEIGHT}"
+    echo "Starting X server for ${TARGET_NAME} on display ${CURRENT_DISPLAY} at ${SCREEN_RESOLUTION}"
 
-echo "Starting X server on display $DISPLAY"
-Xvfb :$DISPLAY_NUM -screen 0 ${SCREEN_RESOLUTION}x24 -ac +extension GLX +render -noreset &
+    Xvfb "${CURRENT_DISPLAY}" -screen 0 "${SCREEN_RESOLUTION}x24" -ac +extension GLX +render -noreset &
+
+    if [ -z "$PRIMARY_DISPLAY" ]; then
+        PRIMARY_DISPLAY="$CURRENT_DISPLAY"
+    fi
+
+    if [ -n "$DISPLAY_MAP" ]; then
+        DISPLAY_MAP="${DISPLAY_MAP},"
+    fi
+    DISPLAY_MAP="${DISPLAY_MAP}${TARGET_NAME}=${CURRENT_DISPLAY}"
+
+    DISPLAY_BASE=$((DISPLAY_BASE + 1))
+done < <(/stream render-targets)
+
+if [ -z "$DISPLAY_MAP" ]; then
+    echo "Failed to determine render targets"
+    exit 1
+fi
+
+export DISPLAY="$PRIMARY_DISPLAY"
+export STREAM_RENDER_DISPLAYS="$DISPLAY_MAP"
+
+echo "Using render target displays: $STREAM_RENDER_DISPLAYS"
 sleep 3
 
-# Wait for X server to be ready
-while ! xdpyinfo -display :$DISPLAY_NUM >/dev/null 2>&1; do
-    echo "Waiting for X server to start..."
-    sleep 1
+for DISPLAY_ENTRY in ${STREAM_RENDER_DISPLAYS//,/ }; do
+    CURRENT_DISPLAY="${DISPLAY_ENTRY#*=}"
+    while ! xdpyinfo -display "$CURRENT_DISPLAY" >/dev/null 2>&1; do
+        echo "Waiting for X server ${CURRENT_DISPLAY} to start..."
+        sleep 1
+    done
 done
-echo "X server ready"
+echo "X servers ready"
 
 echo "=== Setting Up Audio ==="
 

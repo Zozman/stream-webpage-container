@@ -24,6 +24,12 @@ A containerized application to stream a webpage live over RTMP.  Just pass a `WE
 
 `docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to -e RESOLUTION=720p -e FRAMERATE=60 ghcr.io/zozman/stream-webpage-container`
 
+### Start A Multi-Variant Enhanced RTMP Stream
+
+`docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to -e STREAM_VARIANTS='[{"name":"landscape","width":1920,"height":1080,"framerate":"60","videoBitrate":"6000k","audioSource":true},{"name":"portrait","width":1080,"height":1920,"framerate":"60","videoBitrate":"4500k"}]' ghcr.io/zozman/stream-webpage-container`
+
+This mode is intended for Twitch enhanced RTMP style streaming. The first variant becomes the primary H.264 video track, exactly one variant must set `audioSource=true`, and variants with matching aspect ratios share one browser render target while different aspect ratios get separate Chromium/Xvfb displays.
+
 ## Available Image Tags
 
 > [!NOTE]
@@ -155,6 +161,12 @@ To enable status checking for Twitch, provide a `TWITCH_CHANNEL`, `TWITCH_CLIENT
    - String
    - Default: `rtmp://localhost:1935/live/stream`
    - RMTP endpoint to send the stream to.  If using a service such as [Twitch](https://help.twitch.tv/s/twitch-ingest-recommendation?language=en_US), be sure your stream key is at the end of it.
+- `STREAM_VARIANTS`
+   - JSON Array
+   - Optional
+   - When set, overrides `RESOLUTION` and `FRAMERATE` with an explicit enhanced RTMP variant list.
+   - Each variant must include a unique `name`, dimensions (`width` and `height`, or a supported `resolution`), optional `framerate`, optional `videoBitrate`, and exactly one variant must set `audioSource` to `true`.
+   - Variants with the same aspect ratio reuse one browser render target and are scaled into separate FFmpeg video tracks. Variants with different aspect ratios render the webpage in separate Chromium/Xvfb displays so responsive layouts can reflow correctly.
 - `TWITCH_CHANNEL`
    - String
    - If provided a value, the application will attempt to check the status of the stream at the provided channel as per the `STATUS_CRON_SCHEDULE` and will restart the stream if it is detected to not be live.
