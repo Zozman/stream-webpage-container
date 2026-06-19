@@ -16,15 +16,16 @@ import (
 )
 
 const (
-	StreamVariantsEnv    = "STREAM_VARIANTS"
-	StreamRenderDisplays = "STREAM_RENDER_DISPLAYS"
-	RenderTargetsCommand = "render-targets"
-	DefaultAudioBitrate  = "160k"
-	DefaultDisplayBase   = 100
-	DefaultVideoCodec    = "libx264"
-	DefaultVideoPreset   = "veryfast"
-	DefaultVideoTune     = "zerolatency"
-	DefaultVideoCRF      = "23"
+	StreamVariantsEnv     = "STREAM_VARIANTS"
+	StreamRenderDisplays  = "STREAM_RENDER_DISPLAYS"
+	RenderTargetsCommand  = "render-targets"
+	DefaultAudioBitrate   = "160k"
+	DefaultDisplayBase    = 100
+	DefaultVideoCodec     = "libx264"
+	DefaultVideoPreset    = "veryfast"
+	DefaultVideoTune      = "zerolatency"
+	DefaultVideoCRF       = "23"
+	BitrateBufferMultiple = 2
 )
 
 var (
@@ -284,6 +285,9 @@ func buildRenderTargets(variants []StreamVariant) []RenderTarget {
 }
 
 func aspectRatioKey(width, height int) string {
+	if width <= 0 || height <= 0 {
+		return "0:0"
+	}
 	divisor := gcd(width, height)
 	return fmt.Sprintf("%d:%d", width/divisor, height/divisor)
 }
@@ -461,7 +465,7 @@ func buildFFmpegArgs(config *Config) ([]string, error) {
 	)
 
 	for variantIndex, variant := range config.Variants {
-		bufferSize := fmt.Sprintf("%dk", extractNumberFromBitrate(variant.VideoBitrate)*2)
+		bufferSize := fmt.Sprintf("%dk", extractNumberFromBitrate(variant.VideoBitrate)*BitrateBufferMultiple)
 		keyframeInterval := fmt.Sprintf("%d", variant.FramerateInt*2)
 		args = append(args,
 			fmt.Sprintf("-b:v:%d", variantIndex), variant.VideoBitrate,

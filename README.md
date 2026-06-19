@@ -22,7 +22,7 @@ A containerized application to stream a webpage live over RTMP.  Just pass a `WE
 
 ### Start A Stream At 1080p 60 FPS
 
-`docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to -e RESOLUTION=720p -e FRAMERATE=60 ghcr.io/zozman/stream-webpage-container`
+`docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to -e RESOLUTION=1080p -e FRAMERATE=60 ghcr.io/zozman/stream-webpage-container`
 
 ### Start A Multi-Variant Enhanced RTMP Stream
 
