@@ -283,10 +283,15 @@ func callGoLiveAPIWithURL(ctx context.Context, streamKey string, opts GoLiveOpti
 		return nil, fmt.Errorf("failed to marshal Go Live API request: %w", err)
 	}
 
+	var redactedReq GoLiveRequest
+	_ = json.Unmarshal(body, &redactedReq)
+	redactedReq.Authentication = "[REDACTED]"
+	redactedBody, _ := json.Marshal(redactedReq)
+
 	logger.Debug("Calling Twitch Go Live API",
 		zap.String("url", apiURL),
 		zap.String("clientName", clientName),
-		zap.String("requestBody", string(body)))
+		zap.String("requestBody", string(redactedBody)))
 
 	httpCtx, cancel := context.WithTimeout(ctx, GoLiveTimeout)
 	defer cancel()

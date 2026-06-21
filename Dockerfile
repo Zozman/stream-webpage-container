@@ -34,7 +34,6 @@ FROM debian:bookworm-slim AS ffmpeg-build
         --enable-gpl \
         --enable-libx264 \
         --enable-libxcb \
-        --enable-nonfree \
         --disable-doc \
         --disable-ffplay \
         --disable-debug \
@@ -58,7 +57,7 @@ FROM linuxserver/chromium:latest AS runner
         libxcb-shm0 \
         libxcb-xfixes0 \
         libxcb-shape0 \
-        libx264-dev \
+        libx264-163 \
         && rm -rf /var/lib/apt/lists/*
 
     # Copy FFmpeg shared libraries and binaries built from source

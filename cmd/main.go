@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -117,20 +118,11 @@ func (s *StreamState) stopStream(logger *zap.Logger) {
 		logger.Debug("Sending SIGTERM to FFmpeg process")
 		_ = s.ffmpegCmd.Process.Signal(syscall.SIGTERM)
 
-		done := make(chan struct{})
-		go func(cmd *exec.Cmd) {
-			_, _ = cmd.Process.Wait()
-			close(done)
-		}(s.ffmpegCmd)
-
-		select {
-		case <-done:
-			logger.Debug("FFmpeg exited gracefully")
-		case <-time.After(5 * time.Second):
-			logger.Warn("FFmpeg did not exit in time, killing")
-			_ = s.ffmpegCmd.Process.Kill()
-			go func(cmd *exec.Cmd) { _, _ = cmd.Process.Wait() }(s.ffmpegCmd)
-		}
+		// Give FFmpeg a moment to flush and exit, then force-kill.
+		// We don't call Wait() here because startFFmpegStream owns that.
+		time.Sleep(5 * time.Second)
+		// If the process is still running, force-kill it
+		_ = s.ffmpegCmd.Process.Kill()
 	}
 
 	for i, cmd := range s.xvfbCmds {
@@ -533,7 +525,7 @@ func applyGoLiveConfig(ctx context.Context, config *Config, resp *twitch.GoLiveR
 	for i, enc := range resp.EncoderConfigurations {
 		framerate := 60
 		if enc.Framerate != nil && enc.Framerate.Denominator > 0 {
-			framerate = enc.Framerate.Numerator / enc.Framerate.Denominator
+			framerate = (enc.Framerate.Numerator + enc.Framerate.Denominator/2) / enc.Framerate.Denominator
 		}
 
 		bitrate := fmt.Sprintf("%dk", enc.Settings.Bitrate)
@@ -574,6 +566,12 @@ func startXvfb(ctx context.Context, output StreamOutput) (*exec.Cmd, error) {
 	screenSize := fmt.Sprintf("%dx%dx24", output.Width, output.Height)
 
 	logger.Info("Starting Xvfb", zap.Int("display", displayNum), zap.String("screenSize", screenSize))
+
+	// Remove stale lock/socket files that may remain after a SIGKILL
+	lockFile := fmt.Sprintf("/tmp/.X%d-lock", displayNum)
+	socketFile := fmt.Sprintf("/tmp/.X11-unix/X%d", displayNum)
+	os.Remove(lockFile)
+	os.Remove(socketFile)
 
 	cmd := exec.CommandContext(ctx, "Xvfb",
 		fmt.Sprintf(":%d", displayNum),
@@ -802,7 +800,8 @@ func startFFmpegStream(ctx context.Context, config *Config, streamCancel context
 	numOutputs := len(config.Outputs)
 	threadsPerEncoder := 4
 	if numOutputs > 0 {
-		threadsPerEncoder = 32 / numOutputs
+		numCPU := runtime.NumCPU()
+		threadsPerEncoder = numCPU / numOutputs
 		if threadsPerEncoder < 2 {
 			threadsPerEncoder = 2
 		}

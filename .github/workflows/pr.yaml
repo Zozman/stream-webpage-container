@@ -135,23 +135,24 @@ jobs:
     
     - name: Start stream-webpage container
       run: |
-        EXTRA_ENV=""
+        DOCKER_ARGS=(
+          docker run -d
+          --name stream-webpage
+          --network host
+          -e FRAMERATE=30
+          -e LOG_FORMAT=json
+          -e LOG_LEVEL=debug
+          -e PORT=8080
+          -e "RESOLUTION=${{ matrix.resolution }}"
+          -e RTMP_URL=rtmp://localhost:1935/live/stream
+          -e "WEBPAGE_URL=https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs"
+        )
         if [ -n '${{ matrix.stream_outputs }}' ] && [ '${{ matrix.stream_outputs }}' != '' ]; then
-          EXTRA_ENV="-e STREAM_OUTPUTS='${{ matrix.stream_outputs }}'"
+          DOCKER_ARGS+=(-e "STREAM_OUTPUTS=${{ matrix.stream_outputs }}")
         fi
+        DOCKER_ARGS+=(stream-webpage:test-${{ github.run_id }})
         
-        docker run -d \
-          --name stream-webpage \
-          --network host \
-          -e FRAMERATE=30 \
-          -e LOG_FORMAT=json \
-          -e LOG_LEVEL=debug \
-          -e PORT=8080 \
-          -e RESOLUTION=${{ matrix.resolution }} \
-          -e RTMP_URL=rtmp://localhost:1935/live/stream \
-          -e WEBPAGE_URL="https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs" \
-          ${EXTRA_ENV} \
-          stream-webpage:test-${{ github.run_id }}
+        "${DOCKER_ARGS[@]}"
     
     - name: Wait for services to start
       run: |
