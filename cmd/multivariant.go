@@ -67,53 +67,49 @@ type RenderTarget struct {
 	AspectRatioKey string
 }
 
-func loadVariants(ctx context.Context, legacyResolution, legacyFramerate string) ([]StreamVariant, []RenderTarget, error) {
+func loadVariants(ctx context.Context) ([]StreamVariant, []RenderTarget, error) {
 	logger := utils.GetLoggerFromContext(ctx)
 	rawVariants := strings.TrimSpace(utils.GetEnvOrDefault(StreamVariantsEnv, ""))
 
-	var variants []StreamVariant
 	if rawVariants == "" {
-		variant, err := buildLegacyVariant(legacyResolution, legacyFramerate)
+		return nil, nil, fmt.Errorf("%s is required", StreamVariantsEnv)
+	}
+
+	var parsed []StreamVariantConfig
+	if err := json.Unmarshal([]byte(rawVariants), &parsed); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse %s: %w", StreamVariantsEnv, err)
+	}
+
+	if len(parsed) == 0 {
+		return nil, nil, fmt.Errorf("%s must contain at least one variant", StreamVariantsEnv)
+	}
+
+	seenNames := map[string]struct{}{}
+	audioSourceCount := 0
+	var variants []StreamVariant
+	for _, variantConfig := range parsed {
+		variant, err := normalizeVariantConfig(variantConfig)
 		if err != nil {
 			return nil, nil, err
 		}
-		variants = []StreamVariant{variant}
-	} else {
-		var parsed []StreamVariantConfig
-		if err := json.Unmarshal([]byte(rawVariants), &parsed); err != nil {
-			return nil, nil, fmt.Errorf("failed to parse %s: %w", StreamVariantsEnv, err)
+
+		if _, exists := seenNames[variant.Name]; exists {
+			return nil, nil, fmt.Errorf("duplicate variant name %q in %s", variant.Name, StreamVariantsEnv)
+		}
+		seenNames[variant.Name] = struct{}{}
+
+		if variant.AudioSource {
+			audioSourceCount++
 		}
 
-		if len(parsed) == 0 {
-			return nil, nil, fmt.Errorf("%s must contain at least one variant", StreamVariantsEnv)
-		}
+		variants = append(variants, variant)
+	}
 
-		seenNames := map[string]struct{}{}
-		audioSourceCount := 0
-		for _, variantConfig := range parsed {
-			variant, err := normalizeVariantConfig(variantConfig, legacyFramerate)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			if _, exists := seenNames[variant.Name]; exists {
-				return nil, nil, fmt.Errorf("duplicate variant name %q in %s", variant.Name, StreamVariantsEnv)
-			}
-			seenNames[variant.Name] = struct{}{}
-
-			if variant.AudioSource {
-				audioSourceCount++
-			}
-
-			variants = append(variants, variant)
-		}
-
-		switch {
-		case audioSourceCount == 0:
-			return nil, nil, fmt.Errorf("%s must mark exactly one variant as audioSource", StreamVariantsEnv)
-		case audioSourceCount > 1:
-			return nil, nil, fmt.Errorf("%s can only have one variant marked as audioSource", StreamVariantsEnv)
-		}
+	switch {
+	case audioSourceCount == 0:
+		return nil, nil, fmt.Errorf("%s must mark exactly one variant as audioSource", StreamVariantsEnv)
+	case audioSourceCount > 1:
+		return nil, nil, fmt.Errorf("%s can only have one variant marked as audioSource", StreamVariantsEnv)
 	}
 
 	renderTargets := buildRenderTargets(variants)
@@ -122,27 +118,7 @@ func loadVariants(ctx context.Context, legacyResolution, legacyFramerate string)
 	return variants, renderTargets, nil
 }
 
-func buildLegacyVariant(resolution, framerate string) (StreamVariant, error) {
-	normalizedResolution, width, height, err := resolveVariantDimensions(resolution, 0, 0)
-	if err != nil {
-		return StreamVariant{}, err
-	}
-
-	normalizedFramerate, framerateInt := normalizeFramerate(framerate)
-
-	return StreamVariant{
-		Name:         "default",
-		Resolution:   normalizedResolution,
-		Width:        width,
-		Height:       height,
-		Framerate:    normalizedFramerate,
-		FramerateInt: framerateInt,
-		VideoBitrate: defaultBitrateForDimensions(width, height, framerateInt),
-		AudioSource:  true,
-	}, nil
-}
-
-func normalizeVariantConfig(config StreamVariantConfig, fallbackFramerate string) (StreamVariant, error) {
+func normalizeVariantConfig(config StreamVariantConfig) (StreamVariant, error) {
 	name := strings.TrimSpace(config.Name)
 	if name == "" {
 		return StreamVariant{}, fmt.Errorf("stream variant name is required")
@@ -158,7 +134,7 @@ func normalizeVariantConfig(config StreamVariantConfig, fallbackFramerate string
 
 	framerateValue := strings.TrimSpace(config.Framerate)
 	if framerateValue == "" {
-		framerateValue = fallbackFramerate
+		framerateValue = "30"
 	}
 
 	framerate, framerateInt := normalizeFramerate(framerateValue)
@@ -191,7 +167,7 @@ func resolveVariantDimensions(resolution string, width, height int) (string, int
 	}
 
 	switch strings.ToLower(strings.TrimSpace(resolution)) {
-	case "720p", "":
+	case "720p":
 		return "720p", 1280, 720, nil
 	case "1080p":
 		return "1080p", 1920, 1080, nil

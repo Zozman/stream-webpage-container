@@ -16,13 +16,9 @@ A containerized application to stream a webpage live over RTMP.  Just pass a `WE
 
 ## Quick Start
 
-### Start A Stream Using Default Settings (720p 30 FPS)
+### Start A Stream
 
-`docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to ghcr.io/zozman/stream-webpage-container`
-
-### Start A Stream At 1080p 60 FPS
-
-`docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to -e RESOLUTION=1080p -e FRAMERATE=60 ghcr.io/zozman/stream-webpage-container`
+`docker run -e WEBPAGE_URL=https://url-of-website-i-want-to-stream.com -e RTMP_URL=rtmp://rtmp-endpoint.to/stream/to -e STREAM_VARIANTS='[{"name":"default","resolution":"1080p","framerate":"60","audioSource":true}]' ghcr.io/zozman/stream-webpage-container`
 
 ### Start A Multi-Variant Enhanced RTMP Stream
 
@@ -98,7 +94,7 @@ docker build -t stream-webpage .
 # Run the container
 docker run -e WEBPAGE_URL="https://example.com" \
            -e RTMP_URL="rtmp://your-server/live/stream" \
-           -e RESOLUTION="1080p" \
+           -e STREAM_VARIANTS='[{"name":"default","resolution":"1080p","framerate":"60","audioSource":true}]' \
            stream-webpage
 ```
 
@@ -118,12 +114,6 @@ To enable status checking for Twitch, provide a `TWITCH_CHANNEL`, `TWITCH_CLIENT
 
 ## Environmental Variables
 
-- `FRAMERATE`
-   - Enum
-      - `30`
-      - `60`
-   - Default: `30`
-   - Sets the framerate of the stream.  Currently supports `30` or `60` frames per second.
 - `LOG_FORMAT`
    - Enum
       - `json`
@@ -150,22 +140,15 @@ To enable status checking for Twitch, provide a `TWITCH_CHANNEL`, `TWITCH_CLIENT
    - String
    - Default: `*/10 * * * *` (every 10 minutes)
    - Cron string to define how often to check the status of the stream if status checking is enabled.
-- `RESOLUTION`
-   - Enum
-      - `720p`
-      - `1080p`
-      - `2k`
-   - Default: `720p`
-   - What resolution the RTMP stream should be.
 - `RTMP_URL`
    - String
    - Default: `rtmp://localhost:1935/live/stream`
    - RMTP endpoint to send the stream to.  If using a service such as [Twitch](https://help.twitch.tv/s/twitch-ingest-recommendation?language=en_US), be sure your stream key is at the end of it.
 - `STREAM_VARIANTS`
    - JSON Array
-   - Optional
-   - When set, overrides `RESOLUTION` and `FRAMERATE` with an explicit enhanced RTMP variant list.
-   - Each variant must include a unique `name`, dimensions (`width` and `height`, or a supported `resolution`), optional `framerate`, optional `videoBitrate`, and exactly one variant must set `audioSource` to `true`.
+   - **Required**
+   - An array of stream variant configurations for enhanced RTMP output.
+   - Each variant must include a unique `name`, dimensions (`width` and `height`, or a supported `resolution` of `720p`, `1080p`, or `2k`), optional `framerate` (`30` or `60`, defaults to `30`), optional `videoBitrate` (e.g. `"6000k"`), and exactly one variant must set `audioSource` to `true`.
    - Variants with the same aspect ratio reuse one browser render target and are scaled into separate FFmpeg video tracks. Variants with different aspect ratios render the webpage in separate Chromium/Xvfb displays so responsive layouts can reflow correctly.
 - `TWITCH_CHANNEL`
    - String

@@ -26,14 +26,10 @@ import (
 )
 
 const (
-	// Default resoltion for streams sent by the application
-	DefaultResolution = "720p"
 	// Default RTMP URL to stream to
 	DefaultRTMPURL = "rtmp://localhost:1935/live/stream"
 	// Default webpage to capture
 	DefaultWebpageURL = "https://google.com"
-	// Default framerate for the stream
-	DefaultFramerate = "30"
 	// Default cron string for checking stream status
 	DefaultCheckStreamCronString = "*/10 * * * *" // Every 10 minutes
 )
@@ -162,18 +158,6 @@ type Config struct {
 	WebpageURL string
 	// The RTMP URL to stream to
 	RTMPURL string
-	// The resolution of the stream
-	// Can be "720p", "1080p", "2k"
-	// Defaults to "720p" if not set or invalid
-	Resolution string
-	// The framerate of the stream
-	// Can be "30" or "60"
-	// Defaults to "30" if not set or invalid
-	Framerate string
-	// Computed width based on resolution
-	Width int
-	// Computed height based on resolution
-	Height int
 	// All stream variants to include in the enhanced RTMP output
 	Variants []StreamVariant
 	// Render targets needed to produce the configured variants
@@ -203,10 +187,6 @@ func main() {
 	logger.Debug("Starting webpage stream capture",
 		zap.String("webpage", config.WebpageURL),
 		zap.String("rtmp", config.RTMPURL),
-		zap.String("resolution", config.Resolution),
-		zap.String("framerate", config.Framerate),
-		zap.Int("width", config.Width),
-		zap.Int("height", config.Height),
 		zap.Int("variantCount", len(config.Variants)),
 		zap.Int("renderTargetCount", len(config.RenderTargets)))
 
@@ -318,59 +298,17 @@ func printRenderTargets() error {
 
 // Function to load configuration from environment variables
 func loadConfig(ctx context.Context) (*Config, error) {
-	logger := utils.GetLoggerFromContext(ctx)
-
 	config := &Config{
 		WebpageURL: utils.GetEnvOrDefault("WEBPAGE_URL", DefaultWebpageURL),
 		RTMPURL:    utils.GetEnvOrDefault("RTMP_URL", DefaultRTMPURL),
-		Resolution: utils.GetEnvOrDefault("RESOLUTION", DefaultResolution),
-		Framerate:  utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate),
 	}
 
-	// Validate and set framerate
-	originalFramerate := config.Framerate
-	switch config.Framerate {
-	case "30", "60":
-		logger.Debug("Using framerate", zap.String("framerate", config.Framerate))
-	default:
-		logger.Warn("Unsupported framerate, defaulting to 30fps", zap.String("framerate", originalFramerate))
-		config.Framerate = "30"
-	}
-
-	// Validate and set resolution dimensions
-	originalResolution := config.Resolution
-	switch strings.ToLower(config.Resolution) {
-	case "720p":
-		config.Width = 1280
-		config.Height = 720
-		logger.Debug("Using resolution", zap.String("resolution", config.Resolution), zap.Int("width", config.Width), zap.Int("height", config.Height))
-	case "1080p":
-		config.Width = 1920
-		config.Height = 1080
-		logger.Debug("Using resolution", zap.String("resolution", config.Resolution), zap.Int("width", config.Width), zap.Int("height", config.Height))
-	case "2k":
-		config.Width = 2560
-		config.Height = 1440
-		logger.Debug("Using resolution", zap.String("resolution", config.Resolution), zap.Int("width", config.Width), zap.Int("height", config.Height))
-	default:
-		logger.Warn("Unsupported resolution, defaulting to 720p", zap.String("resolution", originalResolution))
-		config.Resolution = "720p"
-		config.Width = 1280
-		config.Height = 720
-	}
-
-	variants, renderTargets, err := loadVariants(ctx, config.Resolution, config.Framerate)
+	variants, renderTargets, err := loadVariants(ctx)
 	if err != nil {
 		return nil, err
 	}
 	config.Variants = variants
 	config.RenderTargets = renderTargets
-	if len(config.Variants) > 0 {
-		config.Resolution = config.Variants[0].Resolution
-		config.Framerate = config.Variants[0].Framerate
-		config.Width = config.Variants[0].Width
-		config.Height = config.Variants[0].Height
-	}
 
 	return config, nil
 }
