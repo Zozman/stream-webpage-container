@@ -11,6 +11,9 @@ on:
     tags:
       - 'v*'
 
+env:
+  IMAGE: ghcr.io/zozman/stream-webpage-container
+
 jobs:
   wait-for-edge:
     name: Wait for Edge Workflows
@@ -20,22 +23,18 @@ jobs:
         uses: lewagon/wait-on-check-action@v1.6.1
         with:
           ref: ${{ github.sha }}
-          check-name: 'Build Edge Image'
+          check-name: 'Build Edge Image / Build Edge Image'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
           allowed-conclusions: success,failure,cancelled,skipped
 
-  release:
-    name: Create Release
+  check-image:
+    name: Check For Existing Edge Image
     runs-on: ubuntu-latest
     needs: wait-for-edge
+    outputs:
+      image_exists: ${{ steps.check_image.outputs.image_exists }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -50,51 +49,71 @@ jobs:
         id: check_image
         run: |
           echo "Checking for edge image with SHA: ${{ github.sha }}"
-          
-          # Check if image with current SHA exists
-          if docker manifest inspect ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }} >/dev/null 2>&1; then
+
+          if docker manifest inspect ${{ env.IMAGE }}:sha-${{ github.sha }} >/dev/null 2>&1; then
             echo "Edge image found for SHA ${{ github.sha }}"
-            echo "image_exists=true" >> $GITHUB_OUTPUT
+            echo "image_exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "No edge image found for SHA ${{ github.sha }}"
-            echo "image_exists=false" >> $GITHUB_OUTPUT
+            echo "image_exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+  retag-image:
+    name: Re-tag Existing Image
+    runs-on: ubuntu-latest
+    needs: check-image
+    if: needs.check-image.outputs.image_exists == 'true'
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Re-tag Existing Image
-        if: steps.check_image.outputs.image_exists == 'true'
         run: |
           echo "Re-tagging existing multi-platform image..."
-          
-          # Use buildx imagetools to create new tags that reference the same multi-platform manifest
-          # This preserves both amd64 and arm64 platforms
-          docker buildx imagetools create --tag ghcr.io/zozman/stream-webpage-container:latest ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }}
-          docker buildx imagetools create --tag ghcr.io/zozman/stream-webpage-container:${{ github.ref_name }} ghcr.io/zozman/stream-webpage-container:sha-${{ github.sha }}
 
-      - name: Generate Docker Metadata For New Build
-        if: steps.check_image.outputs.image_exists == 'false'
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ghcr.io/zozman/stream-webpage-container
-          tags: |
-            type=raw,value=latest
-            type=raw,value=${{ github.ref_name }}
-            type=sha
-            type=sha,format=long
+          docker buildx imagetools create \
+            --tag ${{ env.IMAGE }}:latest \
+            --tag ${{ env.IMAGE }}:${{ github.ref_name }} \
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
 
-      - name: Build & Push New Docker Image
-        if: steps.check_image.outputs.image_exists == 'false'
-        uses: docker/build-push-action@v7
-        with:
-          push: true
-          platforms: linux/amd64,linux/arm64
-          context: .
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+  build-image:
+    name: Build Release Image
+    needs: check-image
+    if: needs.check-image.outputs.image_exists == 'false'
+    uses: ./.github/workflows/docker-multiarch.yaml
+    secrets: inherit
+    with:
+      image: ${{ env.IMAGE }}
+      merge_job_name: Publish Release Image
+      build_job_name_prefix: Build Release Image
+      tags: |
+        type=raw,value=latest
+        type=raw,value=${{ github.ref_name }}
+        type=sha
+        type=sha,format=long
+
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [check-image, retag-image, build-image]
+    if: |
+      always() &&
+      needs.check-image.result == 'success' &&
+      (needs.retag-image.result == 'success' || needs.build-image.result == 'success')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
 
       - name: Docker Actions Summary
         run: |
-          if [ "${{ steps.check_image.outputs.image_exists }}" == "true" ]; then
+          if [ "${{ needs.check-image.outputs.image_exists }}" == "true" ]; then
             echo "✅ Successfully re-tagged existing edge image"
             echo "🏷️  Tags: latest, ${{ github.ref_name }}"
           else
@@ -111,12 +130,12 @@ jobs:
             ## Release ${{ github.ref_name }}
             
             🐳 **Docker Images:**
-            - `ghcr.io/zozman/stream-webpage-container:latest`
-            - `ghcr.io/zozman/stream-webpage-container:${{ github.ref_name }}`
+            - `${{ env.IMAGE }}:latest`
+            - `${{ env.IMAGE }}:${{ github.ref_name }}`
             
             📝 **Image Details:**
             - **SHA:** `${{ github.sha }}`
-            - **Built from:** ${{ steps.check_image.outputs.image_exists == 'true' && 'Re-tagged existing edge image' || 'Freshly built image' }}
+            - **Built from:** ${{ needs.check-image.outputs.image_exists == 'true' && 'Re-tagged existing edge image' || 'Freshly built image' }}
             
             ## What's Changed
             See the [commit history](https://github.com/${{ github.repository }}/commits/${{ github.ref_name }}) for detailed changes.
