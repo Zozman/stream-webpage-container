@@ -694,7 +694,9 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		}
 	}
 
-	return startFFmpegStream(streamCtx, config, streamCancel, chromeCancels, xvfbCmds)
+	err := startFFmpegStream(streamCtx, config, streamCancel, chromeCancels, xvfbCmds)
+	cleanup()
+	return err
 }
 
 // startChrome launches a Chrome instance bound to the output's Xvfb display.
