@@ -57,7 +57,6 @@ FROM linuxserver/chromium:latest AS runner
         libxcb-shm0 \
         libxcb-xfixes0 \
         libxcb-shape0 \
-        libx264-163 \
         && rm -rf /var/lib/apt/lists/*
 
     # Copy FFmpeg shared libraries and binaries built from source
