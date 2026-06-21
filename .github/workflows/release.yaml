@@ -90,7 +90,7 @@ jobs:
     uses: ./.github/workflows/docker-multiarch.yaml
     secrets: inherit
     with:
-      image: ${{ env.IMAGE }}
+      image: ghcr.io/zozman/stream-webpage-container
       merge_job_name: Publish Release Image
       build_job_name_prefix: Build Release Image
       tags: |
