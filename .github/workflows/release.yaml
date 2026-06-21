@@ -84,7 +84,7 @@ jobs:
 
       - name: Build & Push New Docker Image
         if: steps.check_image.outputs.image_exists == 'false'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           push: true
           platforms: linux/amd64,linux/arm64
