@@ -127,13 +127,15 @@ jobs:
       run: |
         echo "Installing static ffprobe from mwader/static-ffmpeg:8.1.2..."
         docker create --name ffmpeg-extract mwader/static-ffmpeg:8.1.2
-        docker cp ffmpeg-extract:/ffprobe /usr/local/bin/ffprobe
-        docker cp ffmpeg-extract:/ffmpeg /usr/local/bin/ffmpeg
+        sudo docker cp ffmpeg-extract:/ffprobe /usr/local/bin/ffprobe
+        sudo docker cp ffmpeg-extract:/ffmpeg /usr/local/bin/ffmpeg
         docker rm ffmpeg-extract
-        chmod +x /usr/local/bin/ffprobe /usr/local/bin/ffmpeg
+        sudo chmod +x /usr/local/bin/ffprobe /usr/local/bin/ffmpeg
         ffprobe -version | head -1
     
     - name: Start stream-webpage container
+      env:
+        STREAM_OUTPUTS: ${{ matrix.stream_outputs }}
       run: |
         DOCKER_ARGS=(
           docker run -d
@@ -147,8 +149,8 @@ jobs:
           -e RTMP_URL=rtmp://localhost:1935/live/stream
           -e "WEBPAGE_URL=https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs"
         )
-        if [ -n '${{ matrix.stream_outputs }}' ] && [ '${{ matrix.stream_outputs }}' != '' ]; then
-          DOCKER_ARGS+=(-e "STREAM_OUTPUTS=${{ matrix.stream_outputs }}")
+        if [ -n "$STREAM_OUTPUTS" ]; then
+          DOCKER_ARGS+=(-e "STREAM_OUTPUTS=${STREAM_OUTPUTS}")
         fi
         DOCKER_ARGS+=(stream-webpage:test-${{ github.run_id }})
         

@@ -99,33 +99,46 @@ func (s *StreamState) setStreamRunning(cancelFunc context.CancelFunc, chromeCanc
 // terminates FFmpeg gracefully, then kills all Xvfb processes.
 func (s *StreamState) stopStream(logger *zap.Logger) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if !s.isRunning {
+		s.mu.Unlock()
 		return
 	}
 
+	// Capture handles and clear state under lock, then release before slow work
+	chromeCancels := s.chromeCancels
+	ffmpegCmd := s.ffmpegCmd
+	xvfbCmds := s.xvfbCmds
+	cancelFunc := s.cancelFunc
+
+	s.isRunning = false
+	s.cancelFunc = nil
+	s.chromeCancels = nil
+	s.xvfbCmds = nil
+	s.ffmpegCmd = nil
+	s.mu.Unlock()
+
 	logger.Info("Stopping existing stream...")
 
-	for i, cancel := range s.chromeCancels {
+	for i, cancel := range chromeCancels {
 		if cancel != nil {
 			logger.Debug("Cancelling Chrome context", zap.Int("index", i))
 			cancel()
 		}
 	}
 
-	if s.ffmpegCmd != nil && s.ffmpegCmd.Process != nil {
+	if ffmpegCmd != nil && ffmpegCmd.Process != nil {
 		logger.Debug("Sending SIGTERM to FFmpeg process")
-		_ = s.ffmpegCmd.Process.Signal(syscall.SIGTERM)
+		_ = ffmpegCmd.Process.Signal(syscall.SIGTERM)
 
 		// Give FFmpeg a moment to flush and exit, then force-kill.
 		// We don't call Wait() here because startFFmpegStream owns that.
 		time.Sleep(5 * time.Second)
 		// If the process is still running, force-kill it
-		_ = s.ffmpegCmd.Process.Kill()
+		_ = ffmpegCmd.Process.Kill()
 	}
 
-	for i, cmd := range s.xvfbCmds {
+	for i, cmd := range xvfbCmds {
 		if cmd != nil && cmd.Process != nil {
 			logger.Debug("Killing Xvfb process", zap.Int("display", BaseDisplayNumber+i))
 			_ = cmd.Process.Kill()
@@ -133,16 +146,10 @@ func (s *StreamState) stopStream(logger *zap.Logger) {
 		}
 	}
 
-	if s.cancelFunc != nil {
+	if cancelFunc != nil {
 		logger.Debug("Cancelling stream context")
-		s.cancelFunc()
+		cancelFunc()
 	}
-
-	s.isRunning = false
-	s.cancelFunc = nil
-	s.chromeCancels = nil
-	s.xvfbCmds = nil
-	s.ffmpegCmd = nil
 
 	logger.Info("Existing stream stopped")
 }
@@ -346,6 +353,16 @@ func loadConfig(ctx context.Context) (*Config, error) {
 		if streamOutputsJSON != "" {
 			var hintOutputs []StreamOutput
 			if err := json.Unmarshal([]byte(streamOutputsJSON), &hintOutputs); err == nil && len(hintOutputs) > 0 {
+				// Resolve resolution presets to dimensions before canvas inference
+				for i := range hintOutputs {
+					if hintOutputs[i].Resolution != "" && hintOutputs[i].Width == 0 {
+						w, h, err := resolveResolution(hintOutputs[i].Resolution)
+						if err == nil {
+							hintOutputs[i].Width = w
+							hintOutputs[i].Height = h
+						}
+					}
+				}
 				// Find the largest landscape entry for primary canvas
 				for _, o := range hintOutputs {
 					if o.Width >= o.Height && o.Width > opts.CanvasWidth {
@@ -355,6 +372,14 @@ func loadConfig(ctx context.Context) (*Config, error) {
 							opts.Framerate = o.Framerate
 						}
 					}
+				}
+				// Default framerate from env or 30 if none was specified in outputs
+				if opts.Framerate == 0 {
+					defaultFR, _ := strconv.Atoi(utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate))
+					if defaultFR == 0 {
+						defaultFR = 30
+					}
+					opts.Framerate = defaultFR
 				}
 				// Find the first portrait entry for the portrait canvas
 				for _, o := range hintOutputs {
@@ -415,6 +440,13 @@ func loadConfig(ctx context.Context) (*Config, error) {
 		}
 
 		for i := range outputs {
+			if outputs[i].Resolution != "" && outputs[i].Width > 0 && outputs[i].Height > 0 {
+				logger.Warn("Output specifies both resolution and width/height; explicit dimensions take priority",
+					zap.Int("index", i),
+					zap.String("resolution", outputs[i].Resolution),
+					zap.Int("width", outputs[i].Width),
+					zap.Int("height", outputs[i].Height))
+			}
 			if outputs[i].Resolution != "" && (outputs[i].Width == 0 || outputs[i].Height == 0) {
 				w, h, err := resolveResolution(outputs[i].Resolution)
 				if err != nil {
