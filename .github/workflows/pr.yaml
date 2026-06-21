@@ -191,11 +191,12 @@ jobs:
           echo "RTMP server is ready"
         '
         
-        # Wait for video stream to appear
+        # Wait for video stream to appear (use RTSP for probing since RTMP readers
+        # only see one video track — RTSP natively supports multiple tracks)
         echo "Waiting for video stream with ffprobe..."
         timeout 300 bash -c '
           while true; do
-            if ffprobe -v quiet -print_format json -show_streams rtmp://localhost:1935/live/stream > stream_info.json 2>/dev/null; then
+            if ffprobe -v quiet -print_format json -show_streams rtsp://localhost:8554/live/stream > stream_info.json 2>/dev/null; then
               video_count=$(jq -r "[.streams[] | select(.codec_type == \"video\")] | length" stream_info.json)
               if [ "$video_count" -gt 0 ]; then
                 echo "Video stream(s) found! Count: $video_count"
