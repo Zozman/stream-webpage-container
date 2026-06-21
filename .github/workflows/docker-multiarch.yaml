@@ -1,0 +1,171 @@
+# Reusable multi-arch Docker build workflow.
+# Builds linux/amd64 and linux/arm64 on native runners, then merges into one manifest.
+name: Build Multi-Arch Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: Full image name (e.g. ghcr.io/org/repo)
+        required: true
+        type: string
+      tags:
+        description: docker/metadata-action tags config applied to the final manifest
+        required: false
+        type: string
+        default: ""
+      publish:
+        description: Push images to the registry and create a multi-arch manifest
+        required: false
+        type: boolean
+        default: true
+      export_integration_image:
+        description: Export the amd64 build as a docker tar artifact for integration tests (publish must be false)
+        required: false
+        type: boolean
+        default: false
+      merge_job_name:
+        description: Display name for the manifest merge job
+        required: false
+        type: string
+        default: Publish Multi-Arch Image
+      build_job_name_prefix:
+        description: Prefix for per-platform build job names
+        required: false
+        type: string
+        default: Build Image
+
+jobs:
+  build:
+    name: ${{ inputs.build_job_name_prefix }} (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        if: inputs.publish
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker Metadata
+        if: inputs.publish
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ inputs.image }}
+          tags: |
+            type=sha,format=long
+
+      - name: Build and push by digest
+        if: inputs.publish
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ inputs.image }},push-by-digest=true,name-canonical=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        if: inputs.publish
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Build and export for integration tests
+        if: ${{ !inputs.publish && inputs.export_integration_image && matrix.platform == 'linux/amd64' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          tags: ${{ inputs.image }}:test-${{ github.run_id }}
+          outputs: type=docker,dest=/tmp/stream-webpage-${{ github.run_id }}.tar
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Upload Docker image artifact
+        if: ${{ !inputs.publish && inputs.export_integration_image && matrix.platform == 'linux/amd64' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-image-${{ github.run_id }}
+          path: /tmp/stream-webpage-${{ github.run_id }}.tar
+          retention-days: 1
+
+      - name: Build for validation
+        if: ${{ !inputs.publish && !(inputs.export_integration_image && matrix.platform == 'linux/amd64') }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+  merge:
+    name: ${{ inputs.merge_job_name }}
+    needs: build
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          name: digests
+          path: /tmp/digests
+
+      - name: Generate Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ inputs.image }}
+          tags: ${{ inputs.tags }}
+
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          TAGS=""
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && TAGS="${TAGS} -t ${tag}"
+          done <<< "${{ steps.meta.outputs.tags }}"
+
+          docker buildx imagetools create \
+            ${TAGS} \
+            $(printf '${{ inputs.image }}@sha256:%s ' *)
