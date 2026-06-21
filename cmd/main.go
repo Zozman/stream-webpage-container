@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	// Default resoltion for streams sent by the application
+	// Default resolution for streams sent by the application
 	DefaultResolution = "720p"
 	// Default RTMP URL to stream to
 	DefaultRTMPURL = "rtmp://localhost:1935/live/stream"
@@ -36,15 +36,37 @@ const (
 	DefaultFramerate = "30"
 	// Default cron string for checking stream status
 	DefaultCheckStreamCronString = "*/10 * * * *" // Every 10 minutes
+	// Base X11 display number; each output gets BaseDisplayNumber + index
+	BaseDisplayNumber = 100
 )
 
-// Struct that represents the current state of the stream
+// StreamOutput represents a single video track configuration parsed from STREAM_OUTPUTS JSON.
+type StreamOutput struct {
+	Resolution   string `json:"resolution,omitempty"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	Framerate    int    `json:"framerate,omitempty"`
+	VideoBitrate string `json:"videoBitrate,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Display      int    `json:"-"`
+}
+
+// Config holds the application-wide streaming configuration.
+type Config struct {
+	WebpageURL string
+	RTMPURL    string
+	Outputs    []StreamOutput
+}
+
+// StreamState represents the current state of the stream, tracking all processes
+// involved (Xvfb displays, Chrome instances, FFmpeg) for coordinated teardown.
 type StreamState struct {
-	mu           sync.RWMutex
-	isRunning    bool
-	cancelFunc   context.CancelFunc
-	chromeCancel context.CancelFunc
-	ffmpegCmd    *exec.Cmd
+	mu            sync.RWMutex
+	isRunning     bool
+	cancelFunc    context.CancelFunc
+	chromeCancels []context.CancelFunc
+	xvfbCmds      []*exec.Cmd
+	ffmpegCmd     *exec.Cmd
 }
 
 // Health response structure
@@ -61,17 +83,19 @@ var (
 	startTime = time.Now()
 )
 
-// Function to set that the current stream is running and save the right objects into the StreamState
-func (s *StreamState) setStreamRunning(cancelFunc, chromeCancel context.CancelFunc, ffmpegCmd *exec.Cmd) {
+// setStreamRunning marks the stream as running and saves all process handles for later teardown.
+func (s *StreamState) setStreamRunning(cancelFunc context.CancelFunc, chromeCancels []context.CancelFunc, xvfbCmds []*exec.Cmd, ffmpegCmd *exec.Cmd) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.isRunning = true
 	s.cancelFunc = cancelFunc
-	s.chromeCancel = chromeCancel
+	s.chromeCancels = chromeCancels
+	s.xvfbCmds = xvfbCmds
 	s.ffmpegCmd = ffmpegCmd
 }
 
-// Function to end the current stream if it's running
+// stopStream ends the current stream if it's running: cancels Chrome contexts,
+// terminates FFmpeg gracefully, then kills all Xvfb processes.
 func (s *StreamState) stopStream(logger *zap.Logger) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,20 +106,19 @@ func (s *StreamState) stopStream(logger *zap.Logger) {
 
 	logger.Info("Stopping existing stream...")
 
-	// Cancel Chrome context
-	if s.chromeCancel != nil {
-		logger.Debug("Cancelling Chrome context")
-		s.chromeCancel()
+	for i, cancel := range s.chromeCancels {
+		if cancel != nil {
+			logger.Debug("Cancelling Chrome context", zap.Int("index", i))
+			cancel()
+		}
 	}
 
-	// Ask FFmpeg to terminate gracefully
 	if s.ffmpegCmd != nil && s.ffmpegCmd.Process != nil {
 		logger.Debug("Sending SIGTERM to FFmpeg process")
 		_ = s.ffmpegCmd.Process.Signal(syscall.SIGTERM)
 
 		done := make(chan struct{})
 		go func(cmd *exec.Cmd) {
-			// Wait will reap the process and free OS resources
 			_, _ = cmd.Process.Wait()
 			close(done)
 		}(s.ffmpegCmd)
@@ -106,12 +129,18 @@ func (s *StreamState) stopStream(logger *zap.Logger) {
 		case <-time.After(5 * time.Second):
 			logger.Warn("FFmpeg did not exit in time, killing")
 			_ = s.ffmpegCmd.Process.Kill()
-			// Ensure we still reap it
 			go func(cmd *exec.Cmd) { _, _ = cmd.Process.Wait() }(s.ffmpegCmd)
 		}
 	}
 
-	// Cancel main stream context
+	for i, cmd := range s.xvfbCmds {
+		if cmd != nil && cmd.Process != nil {
+			logger.Debug("Killing Xvfb process", zap.Int("display", BaseDisplayNumber+i))
+			_ = cmd.Process.Kill()
+			go func(c *exec.Cmd) { _, _ = c.Process.Wait() }(cmd)
+		}
+	}
+
 	if s.cancelFunc != nil {
 		logger.Debug("Cancelling stream context")
 		s.cancelFunc()
@@ -119,68 +148,43 @@ func (s *StreamState) stopStream(logger *zap.Logger) {
 
 	s.isRunning = false
 	s.cancelFunc = nil
-	s.chromeCancel = nil
+	s.chromeCancels = nil
+	s.xvfbCmds = nil
 	s.ffmpegCmd = nil
 
 	logger.Info("Existing stream stopped")
 }
 
-// Function to get if the current stream is running
+// isStreamRunning returns whether the stream is currently active.
 func (s *StreamState) isStreamRunning() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.isRunning
 }
 
-// Function to restart the stream
+// RestartStream stops the current stream; the main loop will automatically restart it.
 func RestartStream(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
 	logger.Info("Triggering stream restart...")
-
-	// Stop the current stream - the main loop will automatically restart it
 	globalStreamState.stopStream(logger)
-
 	return nil
 }
 
-// Function to check if the stream is currently running
+// IsStreamRunning checks if the stream is currently running.
 func IsStreamRunning() bool {
 	return globalStreamState.isStreamRunning()
 }
 
-// Function to stop the current stream if it's running
+// StopCurrentStream stops the current stream if it's running.
 func StopCurrentStream(ctx context.Context) {
 	logger := utils.GetLoggerFromContext(ctx)
 	globalStreamState.stopStream(logger)
 }
 
-// Struct representing the configuration for the stream
-type Config struct {
-	// The URL of the webstie to stream
-	WebpageURL string
-	// The RTMP URL to stream to
-	RTMPURL string
-	// The resolution of the stream
-	// Can be "720p", "1080p", "2k"
-	// Defaults to "720p" if not set or invalid
-	Resolution string
-	// The framerate of the stream
-	// Can be "30" or "60"
-	// Defaults to "30" if not set or invalid
-	Framerate string
-	// Computed width based on resolution
-	Width int
-	// Computed height based on resolution
-	Height int
-}
-
 func main() {
 	logger := utils.GetLogger()
-
-	// Create context with logger
 	ctx := utils.SaveLoggerToContext(context.Background(), logger)
 
-	// Load configuration with logging available
 	config, err := loadConfig(ctx)
 	if err != nil {
 		logger.Fatal("Failed to load configuration", zap.Error(err))
@@ -189,23 +193,27 @@ func main() {
 	logger.Debug("Starting webpage stream capture",
 		zap.String("webpage", config.WebpageURL),
 		zap.String("rtmp", config.RTMPURL),
-		zap.String("resolution", config.Resolution),
-		zap.String("framerate", config.Framerate),
-		zap.Int("width", config.Width),
-		zap.Int("height", config.Height))
+		zap.Int("numOutputs", len(config.Outputs)))
+
+	for i, out := range config.Outputs {
+		logger.Debug("Output configuration",
+			zap.Int("index", i),
+			zap.Int("width", out.Width),
+			zap.Int("height", out.Height),
+			zap.Int("framerate", out.Framerate),
+			zap.String("videoBitrate", out.VideoBitrate),
+			zap.String("name", out.Name))
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Setup HTTP server for metrics and health checks
 	serverPort := utils.GetEnvOrDefault("PORT", "8080")
 	serverAddress := "0.0.0.0:" + serverPort
 	logger.Info("Starting HTTP server", zap.String("address", serverAddress))
 
-	// Setup HTTP routes
 	setupHTTPRoutes()
 
-	// Start HTTP server in a goroutine
 	server := &http.Server{
 		Addr: serverAddress,
 	}
@@ -216,41 +224,31 @@ func main() {
 		}
 	}()
 
-	// Setup stream status checker (will start monitoring after stream begins)
 	cronScheduler := setupStreamStatusChecker(ctx, config)
 
-	// Handle graceful shutdown
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
 		logger.Info("Received shutdown signal, stopping...")
 		signal.Stop(c)
-		// Stop current stream if running
 		StopCurrentStream(ctx)
 		if cronScheduler != nil {
 			cronScheduler.Stop()
 		}
-
-		// Shutdown HTTP server
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			logger.Error("Failed to shutdown HTTP server", zap.Error(err))
 		}
-
 		cancel()
 	}()
 
-	// Run the stream in a loop to handle restarts from the cron job or manual restarts
 	for {
 		select {
-		// Case to handle an expected shutdown signal
 		case <-ctx.Done():
 			logger.Info("Context cancelled, exiting...")
 			return
-		// Default case to start or restart the stream
-		// This will be triggered by the cron job or manual restarts
 		default:
 			logger.Info("Starting/restarting stream...")
 			if err := streamWebpage(ctx, config); err != nil {
@@ -265,7 +263,7 @@ func main() {
 	}
 }
 
-// Returns the health of the application
+// getHealthResponse returns the health of the application.
 func getHealthResponse(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	data := Health{
@@ -276,81 +274,416 @@ func getHealthResponse(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// Function to setup HTTP routes for metrics and health checks
+// setupHTTPRoutes configures HTTP routes for metrics and health checks.
 func setupHTTPRoutes() {
-	// Setup prometheus metrics
 	http.Handle("/metrics", promhttp.Handler())
-	// Setup health endpoint
 	http.HandleFunc("/health", getHealthResponse)
 }
 
-// Function to load configuration from environment variables
+// resolveResolution maps a named resolution preset to width/height dimensions.
+func resolveResolution(resolution string) (int, int, error) {
+	switch strings.ToLower(resolution) {
+	case "360p":
+		return 640, 360, nil
+	case "720p":
+		return 1280, 720, nil
+	case "1080p":
+		return 1920, 1080, nil
+	case "2k":
+		return 2560, 1440, nil
+	default:
+		return 0, 0, fmt.Errorf("unsupported resolution: %s", resolution)
+	}
+}
+
+// deriveBitrate computes a default video bitrate string based on pixel count and framerate,
+// following Twitch broadcasting guidelines.
+func deriveBitrate(width, height, framerate int) string {
+	pixels := width * height
+	highFPS := framerate >= 60
+
+	switch {
+	case pixels <= 640*360:
+		return "1000k"
+	case pixels <= 1280*720:
+		if highFPS {
+			return "4000k"
+		}
+		return "3000k"
+	case pixels <= 1920*1080:
+		if highFPS {
+			return "6000k"
+		}
+		return "4500k"
+	default:
+		if highFPS {
+			return "8500k"
+		}
+		return "6000k"
+	}
+}
+
+// loadConfig loads streaming configuration from environment variables.
+// If TWITCH_ENHANCED_BROADCASTING is enabled, calls the Go Live API for config.
+// Otherwise, if STREAM_OUTPUTS is set, parses multitrack JSON config.
+// Falls back to single-output mode using RESOLUTION/FRAMERATE.
 func loadConfig(ctx context.Context) (*Config, error) {
 	logger := utils.GetLoggerFromContext(ctx)
 
 	config := &Config{
 		WebpageURL: utils.GetEnvOrDefault("WEBPAGE_URL", DefaultWebpageURL),
 		RTMPURL:    utils.GetEnvOrDefault("RTMP_URL", DefaultRTMPURL),
-		Resolution: utils.GetEnvOrDefault("RESOLUTION", DefaultResolution),
-		Framerate:  utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate),
 	}
 
-	// Validate and set framerate
-	originalFramerate := config.Framerate
-	switch config.Framerate {
-	case "30", "60":
-		logger.Debug("Using framerate", zap.String("framerate", config.Framerate))
-	default:
-		logger.Warn("Unsupported framerate, defaulting to 30fps", zap.String("framerate", originalFramerate))
-		config.Framerate = "30"
+	// Twitch Enhanced Broadcasting mode: call Go Live API for server-provided config.
+	// STREAM_OUTPUTS is parsed first (if set) to derive canvas preferences for the API request,
+	// then the API response overrides the actual output tracks.
+	enhancedBroadcasting := utils.GetEnvOrDefault("TWITCH_ENHANCED_BROADCASTING", "")
+	if strings.EqualFold(enhancedBroadcasting, "true") {
+		streamKey := utils.GetEnvOrDefault("TWITCH_STREAM_KEY", "")
+		if streamKey == "" {
+			return nil, fmt.Errorf("TWITCH_ENHANCED_BROADCASTING is enabled but TWITCH_STREAM_KEY is not set")
+		}
+
+		opts := twitch.GoLiveOptions{
+			ClientName: utils.GetEnvOrDefault("TWITCH_CLIENT_NAME", ""),
+		}
+
+		// Derive canvas preferences from STREAM_OUTPUTS if available
+		streamOutputsJSON := utils.GetEnvOrDefault("STREAM_OUTPUTS", "")
+		if streamOutputsJSON != "" {
+			var hintOutputs []StreamOutput
+			if err := json.Unmarshal([]byte(streamOutputsJSON), &hintOutputs); err == nil && len(hintOutputs) > 0 {
+				// Find the largest landscape entry for primary canvas
+				for _, o := range hintOutputs {
+					if o.Width >= o.Height && o.Width > opts.CanvasWidth {
+						opts.CanvasWidth = o.Width
+						opts.CanvasHeight = o.Height
+						if o.Framerate > opts.Framerate {
+							opts.Framerate = o.Framerate
+						}
+					}
+				}
+				// Find the first portrait entry for the portrait canvas
+				for _, o := range hintOutputs {
+					if o.Height > o.Width {
+						opts.PortraitCanvas = &twitch.GoLiveCanvas{
+							Width:        o.Width,
+							Height:       o.Height,
+							CanvasWidth:  o.Width,
+							CanvasHeight: o.Height,
+							Framerate:    twitch.GoLiveFramerate{Numerator: opts.Framerate, Denominator: 1},
+						}
+						break
+					}
+				}
+				// Default max tracks to the number of outputs defined
+				numOutputs := len(hintOutputs)
+				if opts.PortraitCanvas != nil && numOutputs < 4 {
+					numOutputs = 4
+				}
+				opts.MaxTracks = &numOutputs
+			}
+		}
+
+
+		logger.Info("Enhanced Broadcasting enabled, calling Twitch Go Live API...",
+			zap.Intp("maxTracks", opts.MaxTracks),
+			zap.Int("canvasWidth", opts.CanvasWidth),
+			zap.Int("canvasHeight", opts.CanvasHeight),
+			zap.Int("framerate", opts.Framerate),
+			zap.Bool("portrait", opts.PortraitCanvas != nil))
+		goLiveResp, err := twitch.CallGoLiveAPI(ctx, streamKey, opts)
+		if err != nil {
+			logger.Warn("Go Live API call failed, falling back to standard configuration",
+				zap.Error(err))
+		} else {
+			if err := applyGoLiveConfig(ctx, config, goLiveResp); err != nil {
+				logger.Warn("Failed to apply Go Live API configuration, falling back",
+					zap.Error(err))
+			} else {
+				logger.Info("Enhanced Broadcasting configured from Go Live API",
+					zap.String("configId", goLiveResp.Meta.ConfigID),
+					zap.Int("numTracks", len(config.Outputs)),
+					zap.String("rtmpURL", config.RTMPURL))
+				return config, nil
+			}
+		}
 	}
 
-	// Validate and set resolution dimensions
-	originalResolution := config.Resolution
-	switch strings.ToLower(config.Resolution) {
-	case "720p":
-		config.Width = 1280
-		config.Height = 720
-		logger.Debug("Using resolution", zap.String("resolution", config.Resolution), zap.Int("width", config.Width), zap.Int("height", config.Height))
-	case "1080p":
-		config.Width = 1920
-		config.Height = 1080
-		logger.Debug("Using resolution", zap.String("resolution", config.Resolution), zap.Int("width", config.Width), zap.Int("height", config.Height))
-	case "2k":
-		config.Width = 2560
-		config.Height = 1440
-		logger.Debug("Using resolution", zap.String("resolution", config.Resolution), zap.Int("width", config.Width), zap.Int("height", config.Height))
-	default:
-		logger.Warn("Unsupported resolution, defaulting to 720p", zap.String("resolution", originalResolution))
-		config.Resolution = "720p"
-		config.Width = 1280
-		config.Height = 720
+	streamOutputsJSON := utils.GetEnvOrDefault("STREAM_OUTPUTS", "")
+
+	if streamOutputsJSON != "" {
+		var outputs []StreamOutput
+		if err := json.Unmarshal([]byte(streamOutputsJSON), &outputs); err != nil {
+			return nil, fmt.Errorf("failed to parse STREAM_OUTPUTS JSON: %w", err)
+		}
+		if len(outputs) == 0 {
+			return nil, fmt.Errorf("STREAM_OUTPUTS is set but contains no entries")
+		}
+
+		for i := range outputs {
+			if outputs[i].Resolution != "" && (outputs[i].Width == 0 || outputs[i].Height == 0) {
+				w, h, err := resolveResolution(outputs[i].Resolution)
+				if err != nil {
+					return nil, fmt.Errorf("output %d: %w", i, err)
+				}
+				outputs[i].Width = w
+				outputs[i].Height = h
+			}
+			if outputs[i].Width == 0 || outputs[i].Height == 0 {
+				return nil, fmt.Errorf("output %d: must specify resolution or width/height", i)
+			}
+
+			if outputs[i].Framerate == 0 {
+				defaultFR, _ := strconv.Atoi(utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate))
+				if defaultFR == 0 {
+					defaultFR = 30
+				}
+				outputs[i].Framerate = defaultFR
+			}
+
+			if outputs[i].VideoBitrate == "" {
+				outputs[i].VideoBitrate = deriveBitrate(outputs[i].Width, outputs[i].Height, outputs[i].Framerate)
+			}
+
+			outputs[i].Display = BaseDisplayNumber + i
+
+			if outputs[i].Name == "" {
+				outputs[i].Name = fmt.Sprintf("track%d-%dx%d", i, outputs[i].Width, outputs[i].Height)
+			}
+		}
+
+		config.Outputs = outputs
+		logger.Info("Loaded multi-output configuration from STREAM_OUTPUTS", zap.Int("numOutputs", len(outputs)))
+	} else {
+		resolution := utils.GetEnvOrDefault("RESOLUTION", DefaultResolution)
+		framerate := utils.GetEnvOrDefault("FRAMERATE", DefaultFramerate)
+
+		w, h, err := resolveResolution(resolution)
+		if err != nil {
+			logger.Warn("Unsupported resolution, defaulting to 720p", zap.String("resolution", resolution))
+			w, h = 1280, 720
+			resolution = "720p"
+		}
+
+		fr, err := strconv.Atoi(framerate)
+		if err != nil || (fr != 30 && fr != 60) {
+			logger.Warn("Unsupported framerate, defaulting to 30fps", zap.String("framerate", framerate))
+			fr = 30
+		}
+
+		output := StreamOutput{
+			Resolution:   resolution,
+			Width:        w,
+			Height:       h,
+			Framerate:    fr,
+			VideoBitrate: deriveBitrate(w, h, fr),
+			Name:         "primary",
+			Display:      BaseDisplayNumber,
+		}
+		config.Outputs = []StreamOutput{output}
+		logger.Info("Using single-output configuration from RESOLUTION/FRAMERATE",
+			zap.String("resolution", resolution),
+			zap.Int("width", w),
+			zap.Int("height", h),
+			zap.Int("framerate", fr))
 	}
 
 	return config, nil
 }
 
-// Function to stream the specified webpage using Chrome and FFmpeg
+// applyGoLiveConfig converts a Go Live API response into the app's Config,
+// setting the RTMP URL and output tracks from the server-provided configuration.
+func applyGoLiveConfig(ctx context.Context, config *Config, resp *twitch.GoLiveResponse) error {
+	logger := utils.GetLoggerFromContext(ctx)
+
+	if len(resp.IngestEndpoints) == 0 {
+		return fmt.Errorf("Go Live API returned no ingest endpoints")
+	}
+	if len(resp.EncoderConfigurations) == 0 {
+		return fmt.Errorf("Go Live API returned no encoder configurations")
+	}
+
+	// Find the first RTMP endpoint
+	var endpoint *twitch.GoLiveIngestEndpoint
+	for i := range resp.IngestEndpoints {
+		if strings.EqualFold(resp.IngestEndpoints[i].Protocol, "RTMP") {
+			endpoint = &resp.IngestEndpoints[i]
+			break
+		}
+	}
+	if endpoint == nil {
+		return fmt.Errorf("Go Live API returned no RTMP ingest endpoint")
+	}
+
+	// Build the RTMP URL: replace {stream_key} with authentication token, append clientConfigId
+	rtmpURL := strings.Replace(endpoint.URLTemplate, "{stream_key}", endpoint.Authentication, 1)
+	if resp.Meta.ConfigID != "" {
+		if strings.Contains(rtmpURL, "?") {
+			rtmpURL += "&clientConfigId=" + resp.Meta.ConfigID
+		} else {
+			rtmpURL += "?clientConfigId=" + resp.Meta.ConfigID
+		}
+	}
+	config.RTMPURL = rtmpURL
+
+	// Convert encoder configurations to StreamOutputs
+	outputs := make([]StreamOutput, 0, len(resp.EncoderConfigurations))
+	for i, enc := range resp.EncoderConfigurations {
+		framerate := 60
+		if enc.Framerate != nil && enc.Framerate.Denominator > 0 {
+			framerate = enc.Framerate.Numerator / enc.Framerate.Denominator
+		}
+
+		bitrate := fmt.Sprintf("%dk", enc.Settings.Bitrate)
+
+		output := StreamOutput{
+			Width:        enc.Width,
+			Height:       enc.Height,
+			Framerate:    framerate,
+			VideoBitrate: bitrate,
+			Name:         fmt.Sprintf("track%d-%dx%d", i, enc.Width, enc.Height),
+			Display:      BaseDisplayNumber + i,
+		}
+		outputs = append(outputs, output)
+
+		logger.Debug("Enhanced Broadcasting track configured",
+			zap.Int("index", i),
+			zap.Int("width", enc.Width),
+			zap.Int("height", enc.Height),
+			zap.Int("framerate", framerate),
+			zap.String("bitrate", bitrate))
+	}
+
+	config.Outputs = outputs
+
+	if resp.Status.Result == "warning" {
+		logger.Warn("Go Live API returned a warning",
+			zap.String("message", resp.Status.HTMLEnUS))
+	}
+
+	return nil
+}
+
+// startXvfb launches an Xvfb virtual display for the given output, waits for
+// it to become ready, and returns the process handle for lifecycle management.
+func startXvfb(ctx context.Context, output StreamOutput) (*exec.Cmd, error) {
+	logger := utils.GetLoggerFromContext(ctx)
+	displayNum := output.Display
+	screenSize := fmt.Sprintf("%dx%dx24", output.Width, output.Height)
+
+	logger.Info("Starting Xvfb", zap.Int("display", displayNum), zap.String("screenSize", screenSize))
+
+	cmd := exec.CommandContext(ctx, "Xvfb",
+		fmt.Sprintf(":%d", displayNum),
+		"-screen", "0", screenSize,
+		"-ac",
+		"+extension", "GLX",
+		"+render",
+		"-noreset",
+	)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start Xvfb on display :%d: %w", displayNum, err)
+	}
+
+	displayStr := fmt.Sprintf(":%d", displayNum)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		checkCmd := exec.CommandContext(ctx, "xdpyinfo", "-display", displayStr)
+		if err := checkCmd.Run(); err == nil {
+			logger.Debug("Xvfb ready", zap.Int("display", displayNum))
+			return cmd, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	_ = cmd.Process.Kill()
+	return nil, fmt.Errorf("xvfb on display :%d did not become ready within 15 seconds", displayNum)
+}
+
+// streamWebpage orchestrates the full streaming pipeline: launches an Xvfb display
+// and Chrome browser per output track, then starts FFmpeg to capture and stream them all.
 func streamWebpage(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
-	// Check if a stream is already running and stop it
 	if globalStreamState.isStreamRunning() {
 		logger.Info("Stream is already running, stopping existing stream before restart")
 		globalStreamState.stopStream(logger)
-		// Give some time for cleanup
 		time.Sleep(2 * time.Second)
 	}
 
-	// Create a cancellable context for this stream session
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer streamCancel()
 
-	// Create Chrome context with options for screen capture
+	xvfbCmds := make([]*exec.Cmd, 0, len(config.Outputs))
+	chromeCancels := make([]context.CancelFunc, 0, len(config.Outputs))
+
+	cleanup := func() {
+		for _, cancel := range chromeCancels {
+			if cancel != nil {
+				cancel()
+			}
+		}
+		for _, cmd := range xvfbCmds {
+			if cmd != nil && cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				go func(c *exec.Cmd) { _, _ = c.Process.Wait() }(cmd)
+			}
+		}
+	}
+
+	for i, output := range config.Outputs {
+		xvfbCmd, err := startXvfb(streamCtx, output)
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("failed to start Xvfb for output %d: %w", i, err)
+		}
+		xvfbCmds = append(xvfbCmds, xvfbCmd)
+
+		isPrimary := i == 0
+		chromeCancel, err := startChrome(streamCtx, config, output, isPrimary)
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("failed to start Chrome for output %d: %w", i, err)
+		}
+		chromeCancels = append(chromeCancels, chromeCancel)
+	}
+
+	refreshIntervalStr := utils.GetEnvOrDefault("WEBPAGE_REFRESH_INTERVAL", "")
+	if refreshIntervalStr != "" {
+		refreshInterval, err := strconv.Atoi(refreshIntervalStr)
+		if err != nil || refreshInterval <= 0 {
+			logger.Warn("Invalid WEBPAGE_REFRESH_INTERVAL value, automatic refresh disabled",
+				zap.String("invalidValue", refreshIntervalStr), zap.Error(err))
+		} else {
+			logger.Info("Automatic browser refresh is configured but requires chromedp context per instance (managed internally)")
+		}
+	}
+
+	return startFFmpegStream(streamCtx, config, streamCancel, chromeCancels, xvfbCmds)
+}
+
+// startChrome launches a Chrome instance bound to the output's Xvfb display.
+// The primary instance produces audio; non-primary instances are muted.
+func startChrome(ctx context.Context, config *Config, output StreamOutput, isPrimary bool) (context.CancelFunc, error) {
+	logger := utils.GetLoggerFromContext(ctx)
+	displayStr := fmt.Sprintf(":%d", output.Display)
+
+	logger.Info("Starting Chrome browser",
+		zap.String("url", config.WebpageURL),
+		zap.Int("display", output.Display),
+		zap.Int("width", output.Width),
+		zap.Int("height", output.Height),
+		zap.Bool("primary", isPrimary))
+
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", false), // We need non-headless for video capture
+		chromedp.Flag("headless", false),
 		chromedp.Flag("kiosk", true),
-		chromedp.Flag("disable-gpu", false),
+		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
 		chromedp.Flag("disable-setuid-sandbox", true),
 		chromedp.Flag("disable-dev-shm-usage", true),
@@ -360,10 +693,10 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		chromedp.Flag("use-fake-ui-for-media-stream", true),
 		chromedp.Flag("use-fake-device-for-media-stream", true),
 		chromedp.Flag("alsa-output-device", "pulse"),
-		chromedp.Flag("enable-features", "VaapiVideoDecoder"),
+		chromedp.Flag("disable-software-rasterizer", true),
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("mute-audio", false),
+		chromedp.Flag("mute-audio", !isPrimary),
 		chromedp.Flag("window-position", "0,0"),
 		chromedp.Flag("memory-pressure-off", true),
 		chromedp.Flag("disable-background-timer-throttling", true),
@@ -371,179 +704,140 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		chromedp.Flag("disable-backgrounding-occluded-windows", true),
 		chromedp.Flag("disable-features", "TranslateUI,VizDisplayCompositor"),
 		chromedp.Flag("aggressive-cache-discard", true),
-		chromedp.WindowSize(config.Width, config.Height),
+		chromedp.Env("DISPLAY="+displayStr),
+		chromedp.WindowSize(output.Width, output.Height),
 	)
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(streamCtx, opts...)
-	defer allocCancel()
-
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
-	defer chromeCancel()
 
-	// Start Chrome and navigate to webpage
-	logger.Info("Starting Chrome browser", zap.String("url", config.WebpageURL))
+	combinedCancel := func() {
+		chromeCancel()
+		allocCancel()
+	}
 
-	// Load the page
 	if err := chromedp.Run(chromeCtx,
 		chromedp.Navigate(config.WebpageURL),
 		chromedp.WaitVisible("body", chromedp.ByQuery),
 	); err != nil {
-		return fmt.Errorf("failed to navigate to webpage: %v", err)
+		combinedCancel()
+		return nil, fmt.Errorf("failed to navigate to webpage on display :%d: %w", output.Display, err)
 	}
 
-	// Wait a moment for the page to fully load
 	time.Sleep(3 * time.Second)
 
-	// Check if automatic refresh is enabled via environment variable
 	refreshIntervalStr := utils.GetEnvOrDefault("WEBPAGE_REFRESH_INTERVAL", "")
 	if refreshIntervalStr != "" {
 		refreshInterval, err := strconv.Atoi(refreshIntervalStr)
-		if err != nil || refreshInterval <= 0 {
-			logger.Warn("Invalid WEBPAGE_REFRESH_INTERVAL value, automatic refresh disabled",
-				zap.String("invalidValue", refreshIntervalStr), zap.Error(err))
-		} else {
-			logger.Info("Enabling automatic browser refresh",
-				zap.Int("refreshInterval", refreshInterval))
-
+		if err == nil && refreshInterval > 0 {
 			go func() {
 				ticker := time.NewTicker(time.Duration(refreshInterval) * time.Second)
 				defer ticker.Stop()
-
 				for {
 					select {
 					case <-ticker.C:
-						logger.Info("Refreshing browser page", zap.String("url", config.WebpageURL))
 						if err := chromedp.Run(chromeCtx, chromedp.Reload()); err != nil {
-							logger.Error("Failed to refresh browser page", zap.Error(err))
-						} else {
-							logger.Debug("Browser page refreshed successfully")
+							logger.Error("Failed to refresh browser page",
+								zap.Int("display", output.Display), zap.Error(err))
 						}
-					case <-streamCtx.Done():
-						logger.Debug("Stream context cancelled, stopping browser refresh goroutine")
+					case <-ctx.Done():
 						return
 					}
 				}
 			}()
 		}
-	} else {
-		logger.Debug("WEBPAGE_REFRESH_INTERVAL not set, automatic refresh disabled")
 	}
 
-	// Get the display information to find where Chrome is running
-	displayInfo, err := getDisplayInfo()
-	if err != nil {
-		return fmt.Errorf("failed to get display info: %v", err)
-	}
-
-	logger.Debug("Display information", zap.String("display", displayInfo))
-
-	// Start FFmpeg to capture and stream
-	return startFFmpegStream(streamCtx, config, displayInfo, streamCancel, chromeCancel)
+	logger.Debug("Chrome started successfully", zap.Int("display", output.Display))
+	return combinedCancel, nil
 }
 
-// Function to get the display info generated by the start.sh script and feed it to FFmpeg
-func getDisplayInfo() (string, error) {
-	// Try to get the DISPLAY environment variable
-	display := os.Getenv("DISPLAY")
-	if display == "" {
-		display = ":0" // Default X11 display
-	}
-	return display, nil
-}
-
-// Helper function to extract numeric value from bitrate string (e.g., "3000k" -> 3000)
+// extractNumberFromBitrate extracts the numeric value from a bitrate string (e.g., "3000k" -> 3000).
 func extractNumberFromBitrate(bitrate string) int {
-	// Remove the 'k' suffix and convert to int
 	numStr := strings.TrimSuffix(bitrate, "k")
 	num, err := strconv.Atoi(numStr)
 	if err != nil {
-		return 3000 // Default fallback
+		return 3000
 	}
 	return num
 }
 
-// Function to start FFmpeg stream with the given configuration
-func startFFmpegStream(ctx context.Context, config *Config, display string, streamCancel, chromeCancel context.CancelFunc) error {
+// startFFmpegStream builds and runs the FFmpeg command that captures all Xvfb
+// displays (one x11grab input per track) plus one audio input, and muxes them
+// into a single Enhanced RTMP multitrack FLV stream.
+func startFFmpegStream(ctx context.Context, config *Config, streamCancel context.CancelFunc, chromeCancels []context.CancelFunc, xvfbCmds []*exec.Cmd) error {
 	logger := utils.GetLoggerFromContext(ctx)
+	logger.Info("Starting FFmpeg stream", zap.Int("numTracks", len(config.Outputs)))
 
-	logger.Info("Starting FFmpeg stream")
+	var args []string
 
-	// Calculate keyframe interval for 2 seconds (GOP size = framerate * 2)
-	framerate := config.Framerate
-	framerateInt, err := strconv.Atoi(framerate)
-	if err != nil {
-		logger.Error("Invalid framerate, defaulting to 30", zap.String("framerate", framerate), zap.Error(err))
-		framerateInt = 30 // Default to 30
-	}
-	keyframeInterval := fmt.Sprintf("%d", framerateInt*2)
-
-	// Set bitrate based on Twitch recommendations for resolution and framerate
-	// References: https://help.twitch.tv/s/article/broadcasting-guidelines?language=en_US
-	//             https://help.twitch.tv/s/article/stream-quality?language=en_US#how-to-stream
-	var videoBitrate string
-	audioBitrate := "160k" // Always use 160k for audio
-
-	// Compute the bitrate based on resolution and framerate
-	switch strings.ToLower(config.Resolution) {
-	case "720p":
-		if framerateInt >= 60 {
-			videoBitrate = "4000k" // 720p 60fps: 4000 kbps
-		} else {
-			videoBitrate = "3000k" // 720p 30fps: 3000 kbps
-		}
-	case "1080p":
-		if framerateInt >= 60 {
-			videoBitrate = "6000k" // 1080p 60fps: 6000 kbps
-		} else {
-			videoBitrate = "4500k" // 1080p 30fps: 4500 kbps
-		}
-	case "2k":
-		if framerateInt >= 60 {
-			videoBitrate = "8500k" // 2K 60fps: 8500 kbps (Twitch max for non-partners)
-		} else {
-			videoBitrate = "6000k" // 2K 30fps: 6000 kbps
-		}
-	default:
-		// Default to 720p 30fps settings
-		videoBitrate = "3000k"
+	for _, output := range config.Outputs {
+		args = append(args,
+			"-thread_queue_size", "512",
+			"-f", "x11grab",
+			"-draw_mouse", "0",
+			"-video_size", fmt.Sprintf("%dx%d", output.Width, output.Height),
+			"-framerate", strconv.Itoa(output.Framerate),
+			"-i", fmt.Sprintf(":%d+0,0", output.Display),
+		)
 	}
 
-	// Buffer size should be 2x the video bitrate
-	bufferSize := fmt.Sprintf("%dk", (extractNumberFromBitrate(videoBitrate) * 2))
+	args = append(args,
+		"-thread_queue_size", "512",
+		"-f", "alsa",
+		"-i", "default",
+	)
 
-	logger.Debug("Starting Stream Using FFmpeg",
-		zap.String("resolution", config.Resolution),
-		zap.String("framerate", config.Framerate),
-		zap.String("videoBitrate", videoBitrate),
-		zap.String("audioBitrate", audioBitrate),
-		zap.String("bufferSize", bufferSize))
+	audioInputIdx := len(config.Outputs)
 
-	// FFmpeg command to capture screen and audio, then stream to RTMP
-	args := []string{
-		"-f", "x11grab",
-		"-video_size", fmt.Sprintf("%dx%d", config.Width, config.Height),
-		"-framerate", config.Framerate,
-		"-draw_mouse", "0", // Hide mouse cursor
-		"-i", fmt.Sprintf("%s+0,0", display), // Specify exact offset
-		"-f", "alsa", // Use ALSA for audio capture (FFmpeg supports this)
-		"-i", "default", // Use ALSA default device (configured to route to PulseAudio)
-		"-map", "0:v", // Explicitly map video from input 0 (x11grab)
-		"-map", "1:a", // Explicitly map audio from input 1 (alsa)
-		"-vf", "crop=in_w:in_h:0:0", // Crop to exact dimensions
+	for i := range config.Outputs {
+		args = append(args, "-map", fmt.Sprintf("%d:v", i))
+	}
+	args = append(args, "-map", fmt.Sprintf("%d:a", audioInputIdx))
+
+	encoderPreset := utils.GetEnvOrDefault("ENCODER_PRESET", "ultrafast")
+	// Divide available cores among encoder instances to prevent thread oversubscription.
+	// Too many threads (e.g. -threads 0 with 4 encoders on 32 cores = 128+ threads)
+	// causes context-switch overhead that tanks throughput.
+	numOutputs := len(config.Outputs)
+	threadsPerEncoder := 4
+	if numOutputs > 0 {
+		threadsPerEncoder = 32 / numOutputs
+		if threadsPerEncoder < 2 {
+			threadsPerEncoder = 2
+		}
+		if threadsPerEncoder > 8 {
+			threadsPerEncoder = 8
+		}
+	}
+
+	args = append(args,
 		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-tune", "zerolatency",
-		"-crf", "23",
-		"-maxrate", videoBitrate,
-		"-bufsize", bufferSize,
+		"-preset", encoderPreset,
 		"-pix_fmt", "yuv420p",
-		"-g", keyframeInterval, // Set GOP size for 2-second keyframe interval
+	)
+
+	for i, output := range config.Outputs {
+		bitrate := output.VideoBitrate
+		bufsize := fmt.Sprintf("%dk", extractNumberFromBitrate(bitrate)*2)
+		gopSize := output.Framerate * 2
+
+		args = append(args,
+			fmt.Sprintf("-threads:v:%d", i), strconv.Itoa(threadsPerEncoder),
+			fmt.Sprintf("-b:v:%d", i), bitrate,
+			fmt.Sprintf("-maxrate:v:%d", i), bitrate,
+			fmt.Sprintf("-bufsize:v:%d", i), bufsize,
+			fmt.Sprintf("-g:v:%d", i), strconv.Itoa(gopSize),
+		)
+	}
+
+	args = append(args,
 		"-c:a", "aac",
-		"-b:a", audioBitrate,
+		"-b:a", "160k",
 		"-ar", "44100",
 		"-f", "flv",
 		config.RTMPURL,
-	}
+	)
 
 	zapWriter := &zapio.Writer{Log: logger, Level: zap.DebugLevel}
 
@@ -554,23 +848,18 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 	logger.Debug("Starting FFmpeg with command", zap.Strings("args", args))
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start ffmpeg: %v", err)
+		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Start a goroutine to periodically flush the zapWriter while the command is running
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
-
 		for {
 			select {
 			case <-ticker.C:
-				// Check if the process is still running
 				if cmd.Process != nil && cmd.ProcessState == nil {
-					// Sync forces any buffered output to be written
 					zapWriter.Sync()
 				} else {
-					// Process is done or never started
 					return
 				}
 			case <-ctx.Done():
@@ -579,20 +868,18 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 		}
 	}()
 
-	// Register this stream as running
-	globalStreamState.setStreamRunning(streamCancel, chromeCancel, cmd)
+	globalStreamState.setStreamRunning(streamCancel, chromeCancels, xvfbCmds, cmd)
 
 	logger.Debug("FFmpeg started successfully, streaming...")
 
-	// Wait for the command to finish or context to be cancelled
-	err = cmd.Wait()
+	err := cmd.Wait()
 
-	// Clean up global stream state when done
 	defer func() {
 		globalStreamState.mu.Lock()
 		globalStreamState.isRunning = false
 		globalStreamState.cancelFunc = nil
-		globalStreamState.chromeCancel = nil
+		globalStreamState.chromeCancels = nil
+		globalStreamState.xvfbCmds = nil
 		globalStreamState.ffmpegCmd = nil
 		globalStreamState.mu.Unlock()
 	}()
@@ -605,20 +892,18 @@ func startFFmpegStream(ctx context.Context, config *Config, display string, stre
 	return err
 }
 
-// If the proper enviromental variables are set, setup a cron job to check the status of the stream
-// If the stream is not live, then restart the stream
-// This is used because various platforms have maximum stream durations and after that we need to restart
+// setupStreamStatusChecker sets up a cron job to check if the stream is still live.
+// If the stream is not live (e.g., platform max duration exceeded), it triggers a restart.
+// This is only active when TWITCH_CHANNEL is configured.
 func setupStreamStatusChecker(ctx context.Context, config *Config) *cron.Cron {
 	logger := utils.GetLoggerFromContext(ctx)
 
 	logger.Debug("Setting up stream status checker")
 
-	// If a TWITCH_CHANNEL environment variable is set, we assume we want to check the stream status
 	twitchChannel := utils.GetEnvOrDefault("TWITCH_CHANNEL", "")
 	if twitchChannel != "" {
 		logger.Info("Setting up stream status checker for Twitch channel", zap.String("channel", twitchChannel))
 
-		// Get and validate the cron string from environment variables or use the default
 		cronString := utils.GetEnvOrDefault("STATUS_CRON_SCHEDULE", DefaultCheckStreamCronString)
 		if _, err := cron.ParseStandard(cronString); err != nil {
 			logger.Error("Invalid status cron schedule string, using default", zap.String("cronString", cronString), zap.Error(err))

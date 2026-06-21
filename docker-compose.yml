@@ -2,19 +2,26 @@ services:
   # Image to build and run the app
   stream-webpage:
     build: .
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
     environment:
-      - FRAMERATE=${FRAMERATE:-60}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - LOG_LEVEL=${LOG_LEVEL:-debug}
       - PORT=${PORT:-8080}
       - STATUS_CRON_SCHEDULE=${STATUS_CRON_SCHEDULE}
       - RESOLUTION=${RESOLUTION:-720p}
+      - FRAMERATE=${FRAMERATE:-30}
       - RTMP_URL=${RTMP_URL:-rtmp://rtmp-server:1935/live/stream}
+      - STREAM_OUTPUTS=${STREAM_OUTPUTS}
+      - TWITCH_ENHANCED_BROADCASTING=${TWITCH_ENHANCED_BROADCASTING}
+      - TWITCH_STREAM_KEY=${TWITCH_STREAM_KEY}
+      - TWITCH_CLIENT_NAME=${TWITCH_CLIENT_NAME}
+      - ENCODER_PRESET=${ENCODER_PRESET}
       - TWITCH_CHANNEL=${TWITCH_CHANNEL}
       - TWITCH_CLIENT_ID=${TWITCH_CLIENT_ID}
       - TWITCH_CLIENT_SECRET=${TWITCH_CLIENT_SECRET}
       - WEBPAGE_REFRESH_INTERVAL=${WEBPAGE_REFRESH_INTERVAL:-0}
-      - WEBPAGE_URL=${WEBPAGE_URL:-https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs}
+      - WEBPAGE_URL=${WEBPAGE_URL:-https://www.youtube.com/watch?v=xuCn8ux2gbs}
 
   # Image to run unit tests in
   test:
@@ -22,8 +29,10 @@ services:
       context: .
       target: base
 
-  # RTMP server for testing
+  # Enhanced-RTMP capable media server for testing (supports multitrack)
   rtmp-server:
-    image: tiangolo/nginx-rtmp
+    image: bluenviron/mediamtx:latest
     ports:
       - "1935:1935"
+      - "8554:8554"
+      - "8888:8888"

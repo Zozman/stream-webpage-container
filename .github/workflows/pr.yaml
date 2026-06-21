@@ -70,30 +70,45 @@ jobs:
         retention-days: 1
 
   integration-test:
-    name: Run Integration Test (${{ matrix.resolution }})
+    name: "Integration Test: ${{ matrix.name }}"
     runs-on: ubuntu-latest
     needs: [test, build-image]
     if: needs.test.result == 'success' && needs.build-image.result == 'success'
     
     strategy:
+      fail-fast: false
       matrix:
-        resolution: [720p, 1080p, 2k]
         include:
-          - resolution: 720p
-            expected_height: 720
-            expected_width: 1280
-          - resolution: 1080p
-            expected_height: 1080
-            expected_width: 1920
-          - resolution: 2k
-            expected_height: 1440
-            expected_width: 2560
-    
+          # Single-video scenarios (legacy mode, no STREAM_OUTPUTS)
+          - name: "single-720p"
+            resolution: "720p"
+            stream_outputs: ""
+            expected_video_count: 1
+            expected_dims: "1280x720"
+          - name: "single-1080p"
+            resolution: "1080p"
+            stream_outputs: ""
+            expected_video_count: 1
+            expected_dims: "1920x1080"
+          - name: "single-2k"
+            resolution: "2k"
+            stream_outputs: ""
+            expected_video_count: 1
+            expected_dims: "2560x1440"
+          # Multi-video scenario (enhanced RTMP multitrack)
+          - name: "multitrack-3-tracks"
+            resolution: "1080p"
+            stream_outputs: '[{"width":1920,"height":1080,"framerate":60},{"width":1280,"height":720,"framerate":60},{"width":1080,"height":1920,"framerate":30}]'
+            expected_video_count: 3
+            expected_dims: "1080x1920 1280x720 1920x1080"
+
     services:
       rtmp-server:
-        image: tiangolo/nginx-rtmp
+        image: bluenviron/mediamtx:latest
         ports:
           - 1935:1935
+          - 8554:8554
+          - 8888:8888
     
     steps:
     - name: Checkout code
@@ -108,14 +123,23 @@ jobs:
     - name: Load Docker image
       run: docker load -i /tmp/stream-webpage-${{ github.run_id }}.tar
 
-    - name: Install ffmpeg
+    - name: Install static FFmpeg 8.1.2 (ffprobe)
       run: |
-        echo "Installing FFmpeg..."
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        echo "Installing static ffprobe from mwader/static-ffmpeg:8.1.2..."
+        docker create --name ffmpeg-extract mwader/static-ffmpeg:8.1.2
+        docker cp ffmpeg-extract:/ffprobe /usr/local/bin/ffprobe
+        docker cp ffmpeg-extract:/ffmpeg /usr/local/bin/ffmpeg
+        docker rm ffmpeg-extract
+        chmod +x /usr/local/bin/ffprobe /usr/local/bin/ffmpeg
+        ffprobe -version | head -1
     
     - name: Start stream-webpage container
       run: |
+        EXTRA_ENV=""
+        if [ -n '${{ matrix.stream_outputs }}' ] && [ '${{ matrix.stream_outputs }}' != '' ]; then
+          EXTRA_ENV="-e STREAM_OUTPUTS='${{ matrix.stream_outputs }}'"
+        fi
+        
         docker run -d \
           --name stream-webpage \
           --network host \
@@ -126,12 +150,13 @@ jobs:
           -e RESOLUTION=${{ matrix.resolution }} \
           -e RTMP_URL=rtmp://localhost:1935/live/stream \
           -e WEBPAGE_URL="https://www.youtube.com/embed/xuCn8ux2gbs?autoplay=1&loop=1&playlist=xuCn8ux2gbs" \
+          ${EXTRA_ENV} \
           stream-webpage:test-${{ github.run_id }}
     
     - name: Wait for services to start
       run: |
         echo "Waiting for services to start..."
-        sleep 60
+        sleep 90
 
     - name: Test Stream Container Health Endpoint
       run: |
@@ -154,7 +179,7 @@ jobs:
       run: |
         echo "Testing RTMP stream..."
         
-        # Test if RTMP server is accessible and stream is available
+        # Wait for RTMP server
         timeout 30 bash -c '
           while ! nc -z localhost 1935; do
             echo "Waiting for RTMP server..."
@@ -163,47 +188,67 @@ jobs:
           echo "RTMP server is ready"
         '
         
-        # Use ffprobe to check stream properties and wait for video stream
-        echo "Checking stream properties with ffprobe and waiting for video stream..."
+        # Wait for video stream to appear
+        echo "Waiting for video stream with ffprobe..."
         timeout 300 bash -c '
           while true; do
             if ffprobe -v quiet -print_format json -show_streams rtmp://localhost:1935/live/stream > stream_info.json 2>/dev/null; then
-              # Check if we have a video stream
-              video_stream_count=$(cat stream_info.json | jq -r "[.streams[] | select(.codec_type == \"video\")] | length")
-              if [ "$video_stream_count" -gt 0 ]; then
-                echo "Video stream found! Stream is ready."
+              video_count=$(jq -r "[.streams[] | select(.codec_type == \"video\")] | length" stream_info.json)
+              if [ "$video_count" -gt 0 ]; then
+                echo "Video stream(s) found! Count: $video_count"
                 break
-              else
-                echo "Only audio stream found, waiting for video stream..."
               fi
-            else
-              echo "Stream not yet available, retrying..."
             fi
-            sleep 2
+            echo "Stream not yet available, retrying..."
+            sleep 3
           done
         ' || {
           echo "Timeout waiting for video stream, checking container logs..."
           docker logs stream-webpage
           exit 1
         }
+
+    - name: Validate stream properties
+      run: |
+        echo "=== Stream Validation ==="
+        cat stream_info.json | jq '.'
         
-        # Check if stream matches expected resolution
-        height=$(cat stream_info.json | jq -r '.streams[] | select(.codec_type == "video") | .height // empty')
-        width=$(cat stream_info.json | jq -r '.streams[] | select(.codec_type == "video") | .width // empty')
+        # Count video streams
+        video_count=$(jq -r '[.streams[] | select(.codec_type == "video")] | length' stream_info.json)
+        echo "Video track count: $video_count (expected: ${{ matrix.expected_video_count }})"
         
-        echo "Stream resolution: ${width}x${height}"
-        echo "Expected resolution: ${{ matrix.expected_width }}x${{ matrix.expected_height }}"
-        
-        if [ "$height" = "${{ matrix.expected_height }}" ] && [ "$width" = "${{ matrix.expected_width }}" ]; then
-          echo "✅ Stream is ${{ matrix.resolution }} as expected"
-        else
-          echo "❌ Stream is not ${{ matrix.resolution }}. Expected ${{ matrix.expected_width }}x${{ matrix.expected_height }}, got ${width}x${height}"
-          cat stream_info.json | jq '.'
+        if [ "$video_count" != "${{ matrix.expected_video_count }}" ]; then
+          echo "FAIL: Expected ${{ matrix.expected_video_count }} video track(s), got $video_count"
           docker logs stream-webpage
           exit 1
         fi
         
-        echo "✅ Integration test completed successfully"
+        # Count audio streams
+        audio_count=$(jq -r '[.streams[] | select(.codec_type == "audio")] | length' stream_info.json)
+        echo "Audio track count: $audio_count (expected: 1)"
+        
+        if [ "$audio_count" != "1" ]; then
+          echo "FAIL: Expected exactly 1 audio track, got $audio_count"
+          docker logs stream-webpage
+          exit 1
+        fi
+        
+        # Check dimensions (sorted for order-independent comparison)
+        actual_dims=$(jq -r '[.streams[] | select(.codec_type == "video") | "\(.width)x\(.height)"] | sort | join(" ")' stream_info.json)
+        expected_dims=$(echo "${{ matrix.expected_dims }}" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')
+        
+        echo "Actual dimensions (sorted): $actual_dims"
+        echo "Expected dimensions (sorted): $expected_dims"
+        
+        if [ "$actual_dims" != "$expected_dims" ]; then
+          echo "FAIL: Dimensions mismatch"
+          echo "  Expected: $expected_dims"
+          echo "  Got:      $actual_dims"
+          docker logs stream-webpage
+          exit 1
+        fi
+        
+        echo "All stream validations passed!"
     
     - name: Cleanup
       if: always()
