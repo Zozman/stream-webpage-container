@@ -585,14 +585,22 @@ func applyGoLiveConfig(ctx context.Context, config *Config, resp *twitch.GoLiveR
 
 		group, exists := groups[isPortrait]
 		if !exists {
-			// First track for this canvas orientation — it becomes the primary
+			// First track for this canvas orientation — tentatively the primary
 			output.Display = BaseDisplayNumber + len(groups)
 			groups[isPortrait] = &canvasGroup{primaryIdx: len(outputs), isPortrait: isPortrait}
 		} else {
-			// Secondary track — shares the primary's display via scaling
-			primary := outputs[group.primaryIdx]
-			output.Display = primary.Display
-			output.SourceDisplay = primary.Display
+			// Another track in the same orientation — compare pixel area
+			primary := &outputs[group.primaryIdx]
+			if enc.Width*enc.Height > primary.Width*primary.Height {
+				// New track is larger — it becomes the primary, demote the old one
+				primary.SourceDisplay = primary.Display
+				output.Display = primary.Display
+				group.primaryIdx = len(outputs)
+			} else {
+				// Existing primary is still larger — new track is secondary
+				output.Display = primary.Display
+				output.SourceDisplay = primary.Display
+			}
 		}
 
 		outputs = append(outputs, output)
@@ -718,7 +726,7 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		}
 		xvfbCmds = append(xvfbCmds, xvfbCmd)
 
-		isPrimary := i == 0
+		isPrimary := len(chromeCancels) == 0
 		chromeCancel, err := startChrome(streamCtx, config, output, isPrimary)
 		if err != nil {
 			cleanup()
