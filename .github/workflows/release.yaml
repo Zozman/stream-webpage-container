@@ -109,7 +109,7 @@ jobs:
       (needs.retag-image.result == 'success' || needs.build-image.result == 'success')
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Docker Actions Summary
         run: |
