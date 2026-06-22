@@ -50,6 +50,10 @@ type StreamOutput struct {
 	VideoBitrate string `json:"videoBitrate,omitempty"`
 	Name         string `json:"name,omitempty"`
 	Display      int    `json:"-"`
+	// SourceDisplay is set for secondary (scaled) tracks that share a primary
+	// track's Xvfb/Chrome capture instead of getting their own instance.
+	// When non-zero, this track's video comes from scaling the SourceDisplay capture.
+	SourceDisplay int `json:"-"`
 }
 
 // Config holds the application-wide streaming configuration.
@@ -552,7 +556,15 @@ func applyGoLiveConfig(ctx context.Context, config *Config, resp *twitch.GoLiveR
 	}
 	config.RTMPURL = rtmpURL
 
-	// Convert encoder configurations to StreamOutputs
+	// Convert encoder configurations to StreamOutputs, grouping by canvas.
+	// The largest track per canvas gets its own Chrome+Xvfb instance (primary).
+	// Smaller tracks in the same canvas share the primary's capture and use FFmpeg scaling.
+	type canvasGroup struct {
+		primaryIdx int
+		isPortrait bool
+	}
+	groups := make(map[bool]*canvasGroup) // keyed by portrait vs landscape
+
 	outputs := make([]StreamOutput, 0, len(resp.EncoderConfigurations))
 	for i, enc := range resp.EncoderConfigurations {
 		framerate := 60
@@ -561,6 +573,7 @@ func applyGoLiveConfig(ctx context.Context, config *Config, resp *twitch.GoLiveR
 		}
 
 		bitrate := fmt.Sprintf("%dk", enc.Settings.Bitrate)
+		isPortrait := enc.Height > enc.Width
 
 		output := StreamOutput{
 			Width:        enc.Width,
@@ -568,8 +581,28 @@ func applyGoLiveConfig(ctx context.Context, config *Config, resp *twitch.GoLiveR
 			Framerate:    framerate,
 			VideoBitrate: bitrate,
 			Name:         fmt.Sprintf("track%d-%dx%d", i, enc.Width, enc.Height),
-			Display:      BaseDisplayNumber + i,
 		}
+
+		group, exists := groups[isPortrait]
+		if !exists {
+			// First track for this canvas orientation — tentatively the primary
+			output.Display = BaseDisplayNumber + len(groups)
+			groups[isPortrait] = &canvasGroup{primaryIdx: len(outputs), isPortrait: isPortrait}
+		} else {
+			// Another track in the same orientation — compare pixel area
+			primary := &outputs[group.primaryIdx]
+			if enc.Width*enc.Height > primary.Width*primary.Height {
+				// New track is larger — it becomes the primary, demote the old one
+				primary.SourceDisplay = primary.Display
+				output.Display = primary.Display
+				group.primaryIdx = len(outputs)
+			} else {
+				// Existing primary is still larger — new track is secondary
+				output.Display = primary.Display
+				output.SourceDisplay = primary.Display
+			}
+		}
+
 		outputs = append(outputs, output)
 
 		logger.Debug("Enhanced Broadcasting track configured",
@@ -577,7 +610,9 @@ func applyGoLiveConfig(ctx context.Context, config *Config, resp *twitch.GoLiveR
 			zap.Int("width", enc.Width),
 			zap.Int("height", enc.Height),
 			zap.Int("framerate", framerate),
-			zap.String("bitrate", bitrate))
+			zap.String("bitrate", bitrate),
+			zap.Int("display", output.Display),
+			zap.Bool("isSecondary", output.SourceDisplay != 0))
 	}
 
 	config.Outputs = outputs
@@ -636,7 +671,8 @@ func startXvfb(ctx context.Context, output StreamOutput) (*exec.Cmd, error) {
 }
 
 // streamWebpage orchestrates the full streaming pipeline: launches an Xvfb display
-// and Chrome browser per output track, then starts FFmpeg to capture and stream them all.
+// and Chrome browser per canvas (primary tracks), then starts FFmpeg to capture
+// and scale into all output tracks for streaming.
 func streamWebpage(ctx context.Context, config *Config) error {
 	logger := utils.GetLoggerFromContext(ctx)
 
@@ -666,7 +702,23 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		}
 	}
 
+	// Only start Xvfb+Chrome for primary tracks (SourceDisplay == 0).
+	// Secondary tracks share the primary's capture via FFmpeg scaling.
+	startedDisplays := make(map[int]bool)
 	for i, output := range config.Outputs {
+		if output.SourceDisplay != 0 {
+			logger.Debug("Skipping Xvfb/Chrome for secondary track (shares primary capture)",
+				zap.Int("index", i),
+				zap.Int("sourceDisplay", output.SourceDisplay),
+				zap.String("name", output.Name))
+			continue
+		}
+
+		if startedDisplays[output.Display] {
+			continue
+		}
+		startedDisplays[output.Display] = true
+
 		xvfbCmd, err := startXvfb(streamCtx, output)
 		if err != nil {
 			cleanup()
@@ -674,7 +726,7 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		}
 		xvfbCmds = append(xvfbCmds, xvfbCmd)
 
-		isPrimary := i == 0
+		isPrimary := len(chromeCancels) == 0
 		chromeCancel, err := startChrome(streamCtx, config, output, isPrimary)
 		if err != nil {
 			cleanup()
@@ -682,6 +734,10 @@ func streamWebpage(ctx context.Context, config *Config) error {
 		}
 		chromeCancels = append(chromeCancels, chromeCancel)
 	}
+
+	logger.Info("Capture instances started",
+		zap.Int("chromeInstances", len(chromeCancels)),
+		zap.Int("totalTracks", len(config.Outputs)))
 
 	refreshIntervalStr := utils.GetEnvOrDefault("WEBPAGE_REFRESH_INTERVAL", "")
 	if refreshIntervalStr != "" {
@@ -794,43 +850,142 @@ func extractNumberFromBitrate(bitrate string) int {
 	return num
 }
 
-// startFFmpegStream builds and runs the FFmpeg command that captures all Xvfb
-// displays (one x11grab input per track) plus one audio input, and muxes them
-// into a single Enhanced RTMP multitrack FLV stream.
+// startFFmpegStream builds and runs the FFmpeg command that captures Xvfb
+// displays (one x11grab input per canvas, not per track) plus one audio input,
+// applies scale filters for secondary tracks, and muxes everything into a
+// single Enhanced RTMP multitrack FLV stream.
 func startFFmpegStream(ctx context.Context, config *Config, streamCancel context.CancelFunc, chromeCancels []context.CancelFunc, xvfbCmds []*exec.Cmd) error {
 	logger := utils.GetLoggerFromContext(ctx)
 	logger.Info("Starting FFmpeg stream", zap.Int("numTracks", len(config.Outputs)))
 
 	var args []string
 
+	// Build x11grab inputs — one per unique display (primary tracks only)
+	displayToInputIdx := make(map[int]int)
+	inputIdx := 0
 	for _, output := range config.Outputs {
+		if _, exists := displayToInputIdx[output.Display]; exists {
+			continue
+		}
+		// Find the primary output for this display to get capture dimensions
+		var captureWidth, captureHeight, captureFPS int
+		for _, o := range config.Outputs {
+			if o.Display == output.Display && o.SourceDisplay == 0 {
+				captureWidth = o.Width
+				captureHeight = o.Height
+				captureFPS = o.Framerate
+				break
+			}
+		}
+		if captureWidth == 0 {
+			captureWidth = output.Width
+			captureHeight = output.Height
+			captureFPS = output.Framerate
+		}
+
 		args = append(args,
 			"-thread_queue_size", "512",
 			"-f", "x11grab",
 			"-draw_mouse", "0",
-			"-video_size", fmt.Sprintf("%dx%d", output.Width, output.Height),
-			"-framerate", strconv.Itoa(output.Framerate),
+			"-video_size", fmt.Sprintf("%dx%d", captureWidth, captureHeight),
+			"-framerate", strconv.Itoa(captureFPS),
 			"-i", fmt.Sprintf(":%d+0,0", output.Display),
 		)
+		displayToInputIdx[output.Display] = inputIdx
+		inputIdx++
 	}
 
+	// Audio input
 	args = append(args,
 		"-thread_queue_size", "512",
 		"-f", "alsa",
 		"-i", "default",
 	)
+	audioInputIdx := inputIdx
 
-	audioInputIdx := len(config.Outputs)
+	// Build filter_complex for scaling secondary tracks.
+	// When an input feeds both a primary and secondary track, we use split to
+	// duplicate the stream — one copy passes through as-is, the other gets scaled.
+	var filterParts []string
+	streamLabels := make([]string, len(config.Outputs))
+	needsFilter := false
 
-	for i := range config.Outputs {
-		args = append(args, "-map", fmt.Sprintf("%d:v", i))
+	// First pass: determine which inputs need splitting
+	inputNeedsFilter := make(map[int]bool)
+	for _, output := range config.Outputs {
+		if output.SourceDisplay != 0 {
+			srcInput := displayToInputIdx[output.Display]
+			inputNeedsFilter[srcInput] = true
+			needsFilter = true
+		}
 	}
+
+	if needsFilter {
+		// Count how many outputs each input feeds (for split count)
+		inputOutputCount := make(map[int]int)
+		for _, output := range config.Outputs {
+			srcInput := displayToInputIdx[output.Display]
+			inputOutputCount[srcInput]++
+		}
+
+		// Track which split output index we're at for each input
+		inputSplitIdx := make(map[int]int)
+
+		for i, output := range config.Outputs {
+			srcInput := displayToInputIdx[output.Display]
+
+			if !inputNeedsFilter[srcInput] {
+				// This input has no secondaries — pass through directly
+				streamLabels[i] = fmt.Sprintf("%d:v", srcInput)
+			} else {
+				splitIdx := inputSplitIdx[srcInput]
+				inputSplitIdx[srcInput] = splitIdx + 1
+				label := fmt.Sprintf("v%d", i)
+
+				if splitIdx == 0 {
+					// First output for this input — add the split filter
+					splitCount := inputOutputCount[srcInput]
+					splitLabels := make([]string, splitCount)
+					for s := 0; s < splitCount; s++ {
+						splitLabels[s] = fmt.Sprintf("[in%d_%d]", srcInput, s)
+					}
+					filterParts = append(filterParts,
+						fmt.Sprintf("[%d:v]split=%d%s", srcInput, splitCount, strings.Join(splitLabels, "")))
+				}
+
+				splitPadLabel := fmt.Sprintf("[in%d_%d]", srcInput, splitIdx)
+
+				if output.SourceDisplay == 0 {
+					// Primary track — just rename the split output
+					filterParts = append(filterParts,
+						fmt.Sprintf("%snull[%s]", splitPadLabel, label))
+				} else {
+					// Secondary track — scale from split output
+					filterParts = append(filterParts,
+						fmt.Sprintf("%sscale=%d:%d[%s]", splitPadLabel, output.Width, output.Height, label))
+				}
+				streamLabels[i] = fmt.Sprintf("[%s]", label)
+			}
+		}
+	}
+
+	if needsFilter {
+		args = append(args, "-filter_complex", strings.Join(filterParts, ";"))
+	}
+
+	// Map video streams
+	for i := range config.Outputs {
+		if needsFilter && inputNeedsFilter[displayToInputIdx[config.Outputs[i].Display]] {
+			args = append(args, "-map", streamLabels[i])
+		} else {
+			srcInput := displayToInputIdx[config.Outputs[i].Display]
+			args = append(args, "-map", fmt.Sprintf("%d:v", srcInput))
+		}
+	}
+	// Map audio
 	args = append(args, "-map", fmt.Sprintf("%d:a", audioInputIdx))
 
 	encoderPreset := utils.GetEnvOrDefault("ENCODER_PRESET", "ultrafast")
-	// Divide available cores among encoder instances to prevent thread oversubscription.
-	// Too many threads (e.g. -threads 0 with 4 encoders on 32 cores = 128+ threads)
-	// causes context-switch overhead that tanks throughput.
 	numOutputs := len(config.Outputs)
 	threadsPerEncoder := 4
 	if numOutputs > 0 {
