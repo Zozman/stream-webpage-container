@@ -254,13 +254,33 @@ func main() {
 			return
 		default:
 			logger.Info("Starting/restarting stream...")
+
+			// Reload config on every start/restart so Enhanced Broadcasting gets a
+			// fresh Go Live API session (new clientConfigId and RTMP URL). Reusing a
+			// stale config causes FFmpeg to fail immediately on reconnect.
+			freshConfig, err := loadConfig(ctx)
+			if err != nil {
+				logger.Error("Failed to load configuration, will retry in 5 seconds", zap.Error(err))
+				select {
+				case <-time.After(5 * time.Second):
+				case <-ctx.Done():
+					return
+				}
+				continue
+			}
+			config = freshConfig
+
 			if err := streamWebpage(ctx, config); err != nil {
 				if ctx.Err() != nil {
 					logger.Info("Stream stopped due to context cancellation")
 					return
 				}
 				logger.Info("Stream ended, will restart in 5 seconds", zap.Error(err))
-				time.Sleep(5 * time.Second)
+				select {
+				case <-time.After(5 * time.Second):
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}
@@ -406,7 +426,6 @@ func loadConfig(ctx context.Context) (*Config, error) {
 				opts.MaxTracks = &numOutputs
 			}
 		}
-
 
 		logger.Info("Enhanced Broadcasting enabled, calling Twitch Go Live API...",
 			zap.Intp("maxTracks", opts.MaxTracks),
