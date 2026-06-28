@@ -261,7 +261,11 @@ func main() {
 			freshConfig, err := loadConfig(ctx)
 			if err != nil {
 				logger.Error("Failed to load configuration, will retry in 5 seconds", zap.Error(err))
-				time.Sleep(5 * time.Second)
+				select {
+				case <-time.After(5 * time.Second):
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
 			config = freshConfig
@@ -272,7 +276,11 @@ func main() {
 					return
 				}
 				logger.Info("Stream ended, will restart in 5 seconds", zap.Error(err))
-				time.Sleep(5 * time.Second)
+				select {
+				case <-time.After(5 * time.Second):
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}
@@ -418,7 +426,6 @@ func loadConfig(ctx context.Context) (*Config, error) {
 				opts.MaxTracks = &numOutputs
 			}
 		}
-
 
 		logger.Info("Enhanced Broadcasting enabled, calling Twitch Go Live API...",
 			zap.Intp("maxTracks", opts.MaxTracks),
