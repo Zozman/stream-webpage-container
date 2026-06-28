@@ -254,6 +254,18 @@ func main() {
 			return
 		default:
 			logger.Info("Starting/restarting stream...")
+
+			// Reload config on every start/restart so Enhanced Broadcasting gets a
+			// fresh Go Live API session (new clientConfigId and RTMP URL). Reusing a
+			// stale config causes FFmpeg to fail immediately on reconnect.
+			freshConfig, err := loadConfig(ctx)
+			if err != nil {
+				logger.Error("Failed to load configuration, will retry in 5 seconds", zap.Error(err))
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			config = freshConfig
+
 			if err := streamWebpage(ctx, config); err != nil {
 				if ctx.Err() != nil {
 					logger.Info("Stream stopped due to context cancellation")
