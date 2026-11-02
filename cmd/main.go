@@ -823,9 +823,9 @@ func startChrome(ctx context.Context, config *Config, output StreamOutput, isPri
 		allocCancel()
 	}
 
-	if err := chromedp.Run(chromeCtx,
+	if err := chromedp.Do(chromeCtx,
 		chromedp.Navigate(config.WebpageURL),
-		chromedp.WaitVisible("body", chromedp.ByQuery),
+		chromedp.WaitVisible(chromedp.CSS("body")),
 	); err != nil {
 		combinedCancel()
 		return nil, fmt.Errorf("failed to navigate to webpage on display :%d: %w", output.Display, err)
@@ -843,7 +843,7 @@ func startChrome(ctx context.Context, config *Config, output StreamOutput, isPri
 				for {
 					select {
 					case <-ticker.C:
-						if err := chromedp.Run(chromeCtx, chromedp.Reload()); err != nil {
+						if err := chromedp.Do(chromeCtx, chromedp.Reload()); err != nil {
 							logger.Error("Failed to refresh browser page",
 								zap.Int("display", output.Display), zap.Error(err))
 						}

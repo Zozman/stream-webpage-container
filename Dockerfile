@@ -1,5 +1,5 @@
 # Setup base
-FROM golang:1.26.4 AS base
+FROM golang:1.27.3 AS base
     WORKDIR /app
     COPY ./go.mod ./
     COPY ./go.sum ./
@@ -12,9 +12,9 @@ FROM golang:1.26.4 AS base
 FROM base AS builder
     RUN go build -o /stream ./cmd/main.go
 
-# Build FFmpeg 8.1.2 from source with x11grab + libx264 + Enhanced FLV multitrack
+# Build FFmpeg 8.1.3 from source with x11grab + libx264 + Enhanced FLV multitrack
 FROM debian:bookworm-slim AS ffmpeg-build
-    ARG FFMPEG_VERSION=8.1.2
+    ARG FFMPEG_VERSION=8.1.3
     RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
