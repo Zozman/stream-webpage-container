@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Wait for Edge workflows to complete
-        uses: lewagon/wait-on-check-action@v1.6.1
+        uses: lewagon/wait-on-check-action@v1.9.1
         with:
           ref: ${{ github.sha }}
           check-name: 'Build Edge Image / Build Edge Image'
@@ -109,7 +109,7 @@ jobs:
       (needs.retag-image.result == 'success' || needs.build-image.result == 'success')
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Docker Actions Summary
         run: |
